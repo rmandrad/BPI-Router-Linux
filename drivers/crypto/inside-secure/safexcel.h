@@ -189,6 +189,8 @@
 #define EIP197_PE_DEBUG(n)			(0x1ff4 + (0x2000 * (n)))
 #define EIP197_PE_OPTIONS(n)			(0x1ff8 + (0x2000 * (n)))
 #define EIP197_PE_VERSION(n)			(0x1ffc + (0x2000 * (n)))
+#define EIP197_FORCE_CLOCK_ON2			0xffd8
+#define EIP197_FORCE_CLOCK_ON			0xffe8
 #define EIP197_MST_CTRL				0xfff4
 #define EIP197_OPTIONS				0xfff8
 #define EIP197_VERSION				0xfffc
@@ -315,6 +317,7 @@
 #define EIP197_MST_CTRL_RD_CACHE(n)		(((n) & 0xf) << 0)
 #define EIP197_MST_CTRL_WD_CACHE(n)		(((n) & 0xf) << 4)
 #define EIP197_MST_CTRL_TX_MAX_CMD(n)		(((n) & 0xf) << 20)
+#define EIP97_MST_CTRL_TX_MAX_CMD(n)		(((n) & 0xf) << 4)
 #define EIP197_MST_CTRL_BYTE_SWAP		BIT(24)
 #define EIP197_MST_CTRL_NO_BYTE_SWAP		BIT(25)
 #define EIP197_MST_CTRL_BYTE_SWAP_BITS          GENMASK(25, 24)
@@ -742,6 +745,9 @@ struct safexcel_priv_data {
 /* Priority we use for advertising our algorithms */
 #define SAFEXCEL_CRA_PRIORITY		300
 
+/* System cache line size */
+#define SYSTEM_CACHELINE_SIZE		64
+
 /* SM3 digest result for zero length message */
 #define EIP197_SM3_ZEROM_HASH	"\x1A\xB2\x1D\x83\x55\xCF\xA1\x7F" \
 				"\x8E\x61\x19\x48\x31\xE8\x1A\x8F" \
@@ -897,6 +903,7 @@ int safexcel_init_ring_descriptors(struct safexcel_crypto_priv *priv,
 int safexcel_select_ring(struct safexcel_crypto_priv *priv);
 void *safexcel_ring_next_rptr(struct safexcel_crypto_priv *priv,
 			      struct safexcel_desc_ring *ring);
+void *safexcel_ring_first_rptr(struct safexcel_crypto_priv *priv, int  ring);
 void safexcel_ring_rollback_wptr(struct safexcel_crypto_priv *priv,
 				 struct safexcel_desc_ring *ring);
 struct safexcel_command_desc *safexcel_add_cdesc(struct safexcel_crypto_priv *priv,
@@ -932,6 +939,8 @@ extern struct safexcel_alg_template safexcel_alg_ecb_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_ecb_aes;
 extern struct safexcel_alg_template safexcel_alg_cbc_aes;
+extern struct safexcel_alg_template safexcel_alg_cfb_aes;
+extern struct safexcel_alg_template safexcel_alg_ofb_aes;
 extern struct safexcel_alg_template safexcel_alg_ctr_aes;
 extern struct safexcel_alg_template safexcel_alg_md5;
 extern struct safexcel_alg_template safexcel_alg_sha1;
@@ -959,6 +968,7 @@ extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha512_ctr_aes;
 extern struct safexcel_alg_template safexcel_alg_xts_aes;
 extern struct safexcel_alg_template safexcel_alg_gcm;
 extern struct safexcel_alg_template safexcel_alg_ccm;
+extern struct safexcel_alg_template safexcel_alg_crc32;
 extern struct safexcel_alg_template safexcel_alg_cbcmac;
 extern struct safexcel_alg_template safexcel_alg_xcbcmac;
 extern struct safexcel_alg_template safexcel_alg_cmac;
@@ -969,6 +979,8 @@ extern struct safexcel_alg_template safexcel_alg_sm3;
 extern struct safexcel_alg_template safexcel_alg_hmac_sm3;
 extern struct safexcel_alg_template safexcel_alg_ecb_sm4;
 extern struct safexcel_alg_template safexcel_alg_cbc_sm4;
+extern struct safexcel_alg_template safexcel_alg_ofb_sm4;
+extern struct safexcel_alg_template safexcel_alg_cfb_sm4;
 extern struct safexcel_alg_template safexcel_alg_ctr_sm4;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha1_cbc_sm4;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sm3_cbc_sm4;
@@ -983,6 +995,7 @@ extern struct safexcel_alg_template safexcel_alg_hmac_sha3_256;
 extern struct safexcel_alg_template safexcel_alg_hmac_sha3_384;
 extern struct safexcel_alg_template safexcel_alg_hmac_sha3_512;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha1_cbc_des;
+extern struct safexcel_alg_template safexcel_alg_authenc_hmac_md5_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha256_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha224_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha512_cbc_des3_ede;
