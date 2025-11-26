@@ -52,9 +52,12 @@
 			enable-method = "psci";
 			clocks = <&mcusys CLK_MCU_ARM_DIV_SEL>,
 				 <&topckgen CLK_TOP_XTAL>;
+			nvmem-cells = <&cpufreq_calibration>;
+			nvmem-cell-names = "calibration-data";
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cluster0_opp>;
 			mediatek,cci = <&cci>;
+			#cooling-cells = <2>;
 		};
 
 		cpu1: cpu@1 {
@@ -64,9 +67,12 @@
 			enable-method = "psci";
 			clocks = <&mcusys CLK_MCU_ARM_DIV_SEL>,
 				 <&topckgen CLK_TOP_XTAL>;
+			nvmem-cells = <&cpufreq_calibration>;
+			nvmem-cell-names = "calibration-data";
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cluster0_opp>;
 			mediatek,cci = <&cci>;
+			#cooling-cells = <2>;
 		};
 
 		cpu2: cpu@2 {
@@ -76,9 +82,12 @@
 			enable-method = "psci";
 			clocks = <&mcusys CLK_MCU_ARM_DIV_SEL>,
 				 <&topckgen CLK_TOP_XTAL>;
+			nvmem-cells = <&cpufreq_calibration>;
+			nvmem-cell-names = "calibration-data";
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cluster0_opp>;
 			mediatek,cci = <&cci>;
+			#cooling-cells = <2>;
 		};
 
 		cpu3: cpu@3 {
@@ -88,17 +97,28 @@
 			enable-method = "psci";
 			clocks = <&mcusys CLK_MCU_ARM_DIV_SEL>,
 				 <&topckgen CLK_TOP_XTAL>;
+			nvmem-cells = <&cpufreq_calibration>;
+			nvmem-cell-names = "calibration-data";
 			clock-names = "cpu", "intermediate";
 			operating-points-v2 = <&cluster0_opp>;
 			mediatek,cci = <&cci>;
+			#cooling-cells = <2>;
 		};
 
 		cluster0_opp: opp-table-0 {
 			compatible = "operating-points-v2";
 			opp-shared;
 
+			opp-220000000 {
+				opp-hz = /bits/ 64 <220000000>;
+				opp-microvolt = <850000>;
+			};
+			opp-500000000 {
+				opp-hz = /bits/ 64 <500000000>;
+				opp-microvolt = <850000>;
+			};
 			opp-800000000 {
-				opp-hz = /bits/ 64 <800000000>;
+				opp-hz = /bits/ 64 <500000000>;
 				opp-microvolt = <850000>;
 			};
 			opp-1100000000 {
@@ -111,6 +131,10 @@
 			};
 			opp-1800000000 {
 				opp-hz = /bits/ 64 <1800000000>;
+				opp-microvolt = <900000>;
+			};
+			opp-2200000000 {
+				opp-hz = /bits/ 64 <2200000000>;
 				opp-microvolt = <900000>;
 			};
 		};

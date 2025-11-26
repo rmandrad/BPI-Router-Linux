@@ -376,7 +376,7 @@ static int devfreq_set_target(struct devfreq *devfreq, unsigned long new_freq,
 	devfreq_notify_transition(devfreq, &freqs, DEVFREQ_POSTCHANGE);
 
 	if (devfreq_update_status(devfreq, new_freq))
-		dev_warn(&devfreq->dev,
+		dev_dbg(&devfreq->dev,
 			 "Couldn't update frequency transition information.\n");
 
 	devfreq->previous_freq = new_freq;
