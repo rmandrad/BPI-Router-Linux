@@ -772,7 +772,6 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 				struct netlink_ext_ack *extack)
 {
 	struct mlx5e_ipsec_sa_entry *sa_entry = NULL;
-	bool allow_tunnel_mode = false;
 	struct mlx5e_ipsec *ipsec;
 	struct mlx5e_priv *priv;
 	gfp_t gfp;
@@ -804,21 +803,6 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 		goto err_xfrm;
 	}
 
-	err = mlx5_eswitch_block_mode(priv->mdev);
-	if (err)
-		goto unblock_ipsec;
-
-	if (x->props.mode == XFRM_MODE_TUNNEL &&
-	    x->xso.type == XFRM_DEV_OFFLOAD_PACKET) {
-		allow_tunnel_mode = mlx5e_ipsec_fs_tunnel_allowed(sa_entry);
-		if (!allow_tunnel_mode) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "Packet offload tunnel mode is disabled due to encap settings");
-			err = -EINVAL;
-			goto unblock_mode;
-		}
-	}
-
 	/* check esn */
 	if (x->props.flags & XFRM_STATE_ESN)
 		mlx5e_ipsec_update_esn_state(sa_entry);
@@ -833,7 +817,7 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 
 	err = mlx5_ipsec_create_work(sa_entry);
 	if (err)
-		goto unblock_encap;
+		goto unblock_ipsec;
 
 	err = mlx5e_ipsec_create_dwork(sa_entry);
 	if (err)
@@ -847,6 +831,14 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 	err = mlx5e_accel_ipsec_fs_add_rule(sa_entry);
 	if (err)
 		goto err_hw_ctx;
+
+	if (x->props.mode == XFRM_MODE_TUNNEL &&
+	    x->xso.type == XFRM_DEV_OFFLOAD_PACKET &&
+	    !mlx5e_ipsec_fs_tunnel_enabled(sa_entry)) {
+		NL_SET_ERR_MSG_MOD(extack, "Packet offload tunnel mode is disabled due to encap settings");
+		err = -EINVAL;
+		goto err_add_rule;
+	}
 
 	/* We use *_bh() variant because xfrm_timer_handler(), which runs
 	 * in softirq context, can reach our state delete logic and we need
@@ -863,7 +855,8 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 		queue_delayed_work(ipsec->wq, &sa_entry->dwork->dwork,
 				   MLX5_IPSEC_RESCHED);
 
-	if (allow_tunnel_mode) {
+	if (x->xso.type == XFRM_DEV_OFFLOAD_PACKET &&
+	    x->props.mode == XFRM_MODE_TUNNEL) {
 		xa_lock_bh(&ipsec->sadb);
 		__xa_set_mark(&ipsec->sadb, sa_entry->ipsec_obj_id,
 			      MLX5E_IPSEC_TUNNEL_SA);
@@ -872,11 +865,6 @@ static int mlx5e_xfrm_add_state(struct net_device *dev,
 
 out:
 	x->xso.offload_handle = (unsigned long)sa_entry;
-	if (allow_tunnel_mode)
-		mlx5_eswitch_unblock_encap(priv->mdev);
-
-	mlx5_eswitch_unblock_mode(priv->mdev);
-
 	return 0;
 
 err_add_rule:
@@ -889,11 +877,6 @@ release_work:
 	if (sa_entry->work)
 		kfree(sa_entry->work->data);
 	kfree(sa_entry->work);
-unblock_encap:
-	if (allow_tunnel_mode)
-		mlx5_eswitch_unblock_encap(priv->mdev);
-unblock_mode:
-	mlx5_eswitch_unblock_mode(priv->mdev);
 unblock_ipsec:
 	mlx5_eswitch_unblock_ipsec(priv->mdev);
 err_xfrm:

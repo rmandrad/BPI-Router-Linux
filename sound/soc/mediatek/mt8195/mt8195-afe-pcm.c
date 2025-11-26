@@ -3176,6 +3176,7 @@ err_pm_put:
 
 static void mt8195_afe_pcm_dev_remove(struct platform_device *pdev)
 {
+	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		mt8195_afe_runtime_suspend(&pdev->dev);
 }

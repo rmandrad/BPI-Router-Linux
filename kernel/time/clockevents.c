@@ -633,7 +633,7 @@ void tick_offline_cpu(unsigned int cpu)
 	raw_spin_lock(&clockevents_lock);
 
 	tick_broadcast_offline(cpu);
-	tick_shutdown();
+	tick_shutdown(cpu);
 
 	/*
 	 * Unregister the clock event devices which were

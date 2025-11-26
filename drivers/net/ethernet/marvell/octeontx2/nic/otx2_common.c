@@ -1516,8 +1516,10 @@ int otx2_pool_init(struct otx2_nic *pfvf, u16 pool_id,
 		pool->xdp_cnt = numptrs;
 		pool->xdp = devm_kcalloc(pfvf->dev,
 					 numptrs, sizeof(struct xdp_buff *), GFP_KERNEL);
-		if (!pool->xdp)
-			return -ENOMEM;
+		if (IS_ERR(pool->xdp)) {
+			netdev_err(pfvf->netdev, "Creation of xsk pool failed\n");
+			return PTR_ERR(pool->xdp);
+		}
 	}
 
 	return 0;

@@ -1313,7 +1313,10 @@ static int sas_check_parent_topology(struct domain_device *child)
 	int i;
 	int res = 0;
 
-	if (!dev_parent_is_expander(child))
+	if (!child->parent)
+		return 0;
+
+	if (!dev_is_expander(child->parent->dev_type))
 		return 0;
 
 	parent_ex = &child->parent->ex_dev;

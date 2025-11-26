@@ -1043,10 +1043,8 @@ static struct scomp_alg nx842_powernv_alg = {
 	.base.cra_priority	= 300,
 	.base.cra_module	= THIS_MODULE,
 
-	.streams		= {
-		.alloc_ctx	= nx842_powernv_crypto_alloc_ctx,
-		.free_ctx	= nx842_crypto_free_ctx,
-	},
+	.alloc_ctx		= nx842_powernv_crypto_alloc_ctx,
+	.free_ctx		= nx842_crypto_free_ctx,
 	.compress		= nx842_crypto_compress,
 	.decompress		= nx842_crypto_decompress,
 };

@@ -5,7 +5,6 @@
 #include <linux/types.h>
 
 struct __kernel_timespec;
-struct __kernel_old_timeval;
 struct timezone;
 
 #if !defined(CONFIG_64BIT) || defined(BUILD_VDSO32_64)

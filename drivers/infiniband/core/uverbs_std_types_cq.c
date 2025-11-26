@@ -206,7 +206,6 @@ static int UVERBS_HANDLER(UVERBS_METHOD_CQ_CREATE)(
 	return ret;
 
 err_free:
-	ib_umem_release(umem);
 	rdma_restrack_put(&cq->res);
 	kfree(cq);
 err_event_file:

@@ -84,8 +84,7 @@ void kmsan_slab_free(struct kmem_cache *s, void *object)
 	if (s->ctor)
 		return;
 	kmsan_enter_runtime();
-	kmsan_internal_poison_memory(object, s->object_size,
-				     GFP_KERNEL & ~(__GFP_RECLAIM),
+	kmsan_internal_poison_memory(object, s->object_size, GFP_KERNEL,
 				     KMSAN_POISON_CHECK | KMSAN_POISON_FREE);
 	kmsan_leave_runtime();
 }
@@ -115,8 +114,7 @@ void kmsan_kfree_large(const void *ptr)
 	kmsan_enter_runtime();
 	page = virt_to_head_page((void *)ptr);
 	KMSAN_WARN_ON(ptr != page_address(page));
-	kmsan_internal_poison_memory((void *)ptr, page_size(page),
-				     GFP_KERNEL & ~(__GFP_RECLAIM),
+	kmsan_internal_poison_memory((void *)ptr, page_size(page), GFP_KERNEL,
 				     KMSAN_POISON_CHECK | KMSAN_POISON_FREE);
 	kmsan_leave_runtime();
 }

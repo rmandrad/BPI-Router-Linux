@@ -229,7 +229,7 @@ error:
  * @name:	The name of the cell.
  * @namesz:	The strlen of the cell name.
  * @vllist:	A colon/comma separated list of numeric IP addresses or NULL.
- * @reason:	The reason we're doing the lookup
+ * @excl:	T if an error should be given if the cell name already exists.
  * @trace:	The reason to be logged if the lookup is successful.
  *
  * Look up a cell record by name and query the DNS for VL server addresses if
@@ -239,8 +239,7 @@ error:
  */
 struct afs_cell *afs_lookup_cell(struct afs_net *net,
 				 const char *name, unsigned int namesz,
-				 const char *vllist,
-				 enum afs_lookup_cell_for reason,
+				 const char *vllist, bool excl,
 				 enum afs_cell_trace trace)
 {
 	struct afs_cell *cell, *candidate, *cursor;
@@ -248,18 +247,12 @@ struct afs_cell *afs_lookup_cell(struct afs_net *net,
 	enum afs_cell_state state;
 	int ret, n;
 
-	_enter("%s,%s,%u", name, vllist, reason);
+	_enter("%s,%s", name, vllist);
 
-	if (reason != AFS_LOOKUP_CELL_PRELOAD) {
+	if (!excl) {
 		cell = afs_find_cell(net, name, namesz, trace);
-		if (!IS_ERR(cell)) {
-			if (reason == AFS_LOOKUP_CELL_DYNROOT)
-				goto no_wait;
-			if (cell->state == AFS_CELL_SETTING_UP ||
-			    cell->state == AFS_CELL_UNLOOKED)
-				goto lookup_cell;
+		if (!IS_ERR(cell))
 			goto wait_for_cell;
-		}
 	}
 
 	/* Assume we're probably going to create a cell and preallocate and
@@ -305,68 +298,25 @@ struct afs_cell *afs_lookup_cell(struct afs_net *net,
 	rb_insert_color(&cell->net_node, &net->cells);
 	up_write(&net->cells_lock);
 
-lookup_cell:
-	if (reason != AFS_LOOKUP_CELL_PRELOAD &&
-	    reason != AFS_LOOKUP_CELL_ROOTCELL) {
-		set_bit(AFS_CELL_FL_DO_LOOKUP, &cell->flags);
-		afs_queue_cell(cell, afs_cell_trace_queue_new);
-	}
+	afs_queue_cell(cell, afs_cell_trace_queue_new);
 
 wait_for_cell:
+	_debug("wait_for_cell");
 	state = smp_load_acquire(&cell->state); /* vs error */
-	switch (state) {
-	case AFS_CELL_ACTIVE:
-	case AFS_CELL_DEAD:
-		break;
-	case AFS_CELL_UNLOOKED:
-	default:
-		if (reason == AFS_LOOKUP_CELL_PRELOAD ||
-		    reason == AFS_LOOKUP_CELL_ROOTCELL)
-			break;
-		_debug("wait_for_cell");
+	if (state != AFS_CELL_ACTIVE &&
+	    state != AFS_CELL_DEAD) {
 		afs_see_cell(cell, afs_cell_trace_wait);
 		wait_var_event(&cell->state,
 			       ({
 				       state = smp_load_acquire(&cell->state); /* vs error */
 				       state == AFS_CELL_ACTIVE || state == AFS_CELL_DEAD;
 			       }));
-		_debug("waited_for_cell %d %d", cell->state, cell->error);
 	}
 
-no_wait:
 	/* Check the state obtained from the wait check. */
-	state = smp_load_acquire(&cell->state); /* vs error */
 	if (state == AFS_CELL_DEAD) {
 		ret = cell->error;
 		goto error;
-	}
-	if (state == AFS_CELL_ACTIVE) {
-		switch (cell->dns_status) {
-		case DNS_LOOKUP_NOT_DONE:
-			if (cell->dns_source == DNS_RECORD_FROM_CONFIG) {
-				ret = 0;
-				break;
-			}
-			fallthrough;
-		default:
-			ret = -EIO;
-			goto error;
-		case DNS_LOOKUP_GOOD:
-		case DNS_LOOKUP_GOOD_WITH_BAD:
-			ret = 0;
-			break;
-		case DNS_LOOKUP_GOT_NOT_FOUND:
-			ret = -ENOENT;
-			goto error;
-		case DNS_LOOKUP_BAD:
-			ret = -EREMOTEIO;
-			goto error;
-		case DNS_LOOKUP_GOT_LOCAL_FAILURE:
-		case DNS_LOOKUP_GOT_TEMP_FAILURE:
-		case DNS_LOOKUP_GOT_NS_FAILURE:
-			ret = -EDESTADDRREQ;
-			goto error;
-		}
 	}
 
 	_leave(" = %p [cell]", cell);
@@ -375,7 +325,7 @@ no_wait:
 cell_already_exists:
 	_debug("cell exists");
 	cell = cursor;
-	if (reason == AFS_LOOKUP_CELL_PRELOAD) {
+	if (excl) {
 		ret = -EEXIST;
 	} else {
 		afs_use_cell(cursor, trace);
@@ -434,8 +384,7 @@ int afs_cell_init(struct afs_net *net, const char *rootcell)
 		return -EINVAL;
 
 	/* allocate a cell record for the root/workstation cell */
-	new_root = afs_lookup_cell(net, rootcell, len, vllist,
-				   AFS_LOOKUP_CELL_ROOTCELL,
+	new_root = afs_lookup_cell(net, rootcell, len, vllist, false,
 				   afs_cell_trace_use_lookup_ws);
 	if (IS_ERR(new_root)) {
 		_leave(" = %ld", PTR_ERR(new_root));
@@ -828,7 +777,6 @@ static bool afs_manage_cell(struct afs_cell *cell)
 	switch (cell->state) {
 	case AFS_CELL_SETTING_UP:
 		goto set_up_cell;
-	case AFS_CELL_UNLOOKED:
 	case AFS_CELL_ACTIVE:
 		goto cell_is_active;
 	case AFS_CELL_REMOVING:
@@ -849,7 +797,7 @@ set_up_cell:
 		goto remove_cell;
 	}
 
-	afs_set_cell_state(cell, AFS_CELL_UNLOOKED);
+	afs_set_cell_state(cell, AFS_CELL_ACTIVE);
 
 cell_is_active:
 	if (afs_has_cell_expired(cell, &next_manage))
@@ -859,8 +807,6 @@ cell_is_active:
 		ret = afs_update_cell(cell);
 		if (ret < 0)
 			cell->error = ret;
-		if (cell->state == AFS_CELL_UNLOOKED)
-			afs_set_cell_state(cell, AFS_CELL_ACTIVE);
 	}
 
 	if (next_manage < TIME64_MAX && cell->net->live) {

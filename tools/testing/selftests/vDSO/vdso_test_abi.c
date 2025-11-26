@@ -182,11 +182,12 @@ int main(int argc, char **argv)
 	unsigned long sysinfo_ehdr = getauxval(AT_SYSINFO_EHDR);
 
 	ksft_print_header();
-
-	if (!sysinfo_ehdr)
-		ksft_exit_skip("AT_SYSINFO_EHDR is not present!\n");
-
 	ksft_set_plan(VDSO_TEST_PLAN);
+
+	if (!sysinfo_ehdr) {
+		ksft_print_msg("AT_SYSINFO_EHDR is not present!\n");
+		return KSFT_SKIP;
+	}
 
 	version = versions[VDSO_VERSION];
 	name = (const char **)&names[VDSO_NAMES];

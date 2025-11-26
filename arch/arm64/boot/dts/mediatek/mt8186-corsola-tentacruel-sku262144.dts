@@ -42,7 +42,3 @@
 		CROS_STD_MAIN_KEYMAP
 	>;
 };
-
-&touchscreen {
-	compatible = "elan,ekth6a12nay";
-};

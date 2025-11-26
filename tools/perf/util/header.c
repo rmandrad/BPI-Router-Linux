@@ -1022,9 +1022,12 @@ static int write_bpf_prog_info(struct feat_fd *ff,
 
 	down_read(&env->bpf_progs.lock);
 
+	if (env->bpf_progs.infos_cnt == 0)
+		goto out;
+
 	ret = do_write(ff, &env->bpf_progs.infos_cnt,
 		       sizeof(env->bpf_progs.infos_cnt));
-	if (ret < 0 || env->bpf_progs.infos_cnt == 0)
+	if (ret < 0)
 		goto out;
 
 	root = &env->bpf_progs.infos;
@@ -1064,10 +1067,13 @@ static int write_bpf_btf(struct feat_fd *ff,
 
 	down_read(&env->bpf_progs.lock);
 
+	if (env->bpf_progs.btfs_cnt == 0)
+		goto out;
+
 	ret = do_write(ff, &env->bpf_progs.btfs_cnt,
 		       sizeof(env->bpf_progs.btfs_cnt));
 
-	if (ret < 0 || env->bpf_progs.btfs_cnt == 0)
+	if (ret < 0)
 		goto out;
 
 	root = &env->bpf_progs.btfs;

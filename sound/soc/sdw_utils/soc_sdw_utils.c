@@ -600,6 +600,7 @@ struct asoc_sdw_codec_info codec_info_list[] = {
 			{
 				.direction = {true, false},
 				.dai_name = "cs42l43-dp6",
+				.component_name = "cs42l43",
 				.dai_type = SOC_SDW_DAI_TYPE_AMP,
 				.dailink = {SOC_SDW_AMP_OUT_DAI_ID, SOC_SDW_UNUSED_DAI_ID},
 				.init = asoc_sdw_cs42l43_spk_init,
@@ -1239,7 +1240,7 @@ static int is_sdca_endpoint_present(struct device *dev,
 	struct sdw_slave *slave;
 	struct device *sdw_dev;
 	const char *sdw_codec_name;
-	int ret, i;
+	int i;
 
 	dlc = kzalloc(sizeof(*dlc), GFP_KERNEL);
 	if (!dlc)
@@ -1269,16 +1270,13 @@ static int is_sdca_endpoint_present(struct device *dev,
 	}
 
 	slave = dev_to_sdw_dev(sdw_dev);
-	if (!slave) {
-		ret = -EINVAL;
-		goto put_device;
-	}
+	if (!slave)
+		return -EINVAL;
 
 	/* Make sure BIOS provides SDCA properties */
 	if (!slave->sdca_data.interface_revision) {
 		dev_warn(&slave->dev, "SDCA properties not found in the BIOS\n");
-		ret = 1;
-		goto put_device;
+		return 1;
 	}
 
 	for (i = 0; i < slave->sdca_data.num_functions; i++) {
@@ -1287,8 +1285,7 @@ static int is_sdca_endpoint_present(struct device *dev,
 		if (dai_type == dai_info->dai_type) {
 			dev_dbg(&slave->dev, "DAI type %d sdca function %s found\n",
 				dai_type, slave->sdca_data.function[i].name);
-			ret = 1;
-			goto put_device;
+			return 1;
 		}
 	}
 
@@ -1296,11 +1293,7 @@ static int is_sdca_endpoint_present(struct device *dev,
 		"SDCA device function for DAI type %d not supported, skip endpoint\n",
 		dai_info->dai_type);
 
-	ret = 0;
-
-put_device:
-	put_device(sdw_dev);
-	return ret;
+	return 0;
 }
 
 int asoc_sdw_parse_sdw_endpoints(struct snd_soc_card *card,

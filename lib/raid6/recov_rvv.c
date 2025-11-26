@@ -4,7 +4,9 @@
  * Author: Chunyan Zhang <zhangchunyan@iscas.ac.cn>
  */
 
+#include <asm/simd.h>
 #include <asm/vector.h>
+#include <crypto/internal/simd.h>
 #include <linux/raid/pq.h>
 
 static int rvv_has_vector(void)

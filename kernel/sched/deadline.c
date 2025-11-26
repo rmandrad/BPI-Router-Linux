@@ -1582,9 +1582,6 @@ void dl_server_start(struct sched_dl_entity *dl_se)
 	if (!dl_server(dl_se) || dl_se->dl_server_active)
 		return;
 
-	if (WARN_ON_ONCE(!cpu_online(cpu_of(rq))))
-		return;
-
 	dl_se->dl_server_active = 1;
 	enqueue_dl_entity(dl_se, ENQUEUE_WAKEUP);
 	if (!dl_task(dl_se->rq->curr) || dl_entity_preempt(dl_se, &rq->curr->dl))
@@ -2554,25 +2551,6 @@ static int find_later_rq(struct task_struct *task)
 	return -1;
 }
 
-static struct task_struct *pick_next_pushable_dl_task(struct rq *rq)
-{
-	struct task_struct *p;
-
-	if (!has_pushable_dl_tasks(rq))
-		return NULL;
-
-	p = __node_2_pdl(rb_first_cached(&rq->dl.pushable_dl_tasks_root));
-
-	WARN_ON_ONCE(rq->cpu != task_cpu(p));
-	WARN_ON_ONCE(task_current(rq, p));
-	WARN_ON_ONCE(p->nr_cpus_allowed <= 1);
-
-	WARN_ON_ONCE(!task_on_rq_queued(p));
-	WARN_ON_ONCE(!dl_task(p));
-
-	return p;
-}
-
 /* Locks the rq it finds */
 static struct rq *find_lock_later_rq(struct task_struct *task, struct rq *rq)
 {
@@ -2600,37 +2578,12 @@ static struct rq *find_lock_later_rq(struct task_struct *task, struct rq *rq)
 
 		/* Retry if something changed. */
 		if (double_lock_balance(rq, later_rq)) {
-			/*
-			 * double_lock_balance had to release rq->lock, in the
-			 * meantime, task may no longer be fit to be migrated.
-			 * Check the following to ensure that the task is
-			 * still suitable for migration:
-			 * 1. It is possible the task was scheduled,
-			 *    migrate_disabled was set and then got preempted,
-			 *    so we must check the task migration disable
-			 *    flag.
-			 * 2. The CPU picked is in the task's affinity.
-			 * 3. For throttled task (dl_task_offline_migration),
-			 *    check the following:
-			 *    - the task is not on the rq anymore (it was
-			 *      migrated)
-			 *    - the task is not on CPU anymore
-			 *    - the task is still a dl task
-			 *    - the task is not queued on the rq anymore
-			 * 4. For the non-throttled task (push_dl_task), the
-			 *    check to ensure that this task is still at the
-			 *    head of the pushable tasks list is enough.
-			 */
-			if (unlikely(is_migration_disabled(task) ||
+			if (unlikely(task_rq(task) != rq ||
 				     !cpumask_test_cpu(later_rq->cpu, &task->cpus_mask) ||
-				     (task->dl.dl_throttled &&
-				      (task_rq(task) != rq ||
-				       task_on_cpu(rq, task) ||
-				       !dl_task(task) ||
-				       !task_on_rq_queued(task))) ||
-				     (!task->dl.dl_throttled &&
-				      task != pick_next_pushable_dl_task(rq)))) {
-
+				     task_on_cpu(rq, task) ||
+				     !dl_task(task) ||
+				     is_migration_disabled(task) ||
+				     !task_on_rq_queued(task))) {
 				double_unlock_balance(rq, later_rq);
 				later_rq = NULL;
 				break;
@@ -2651,6 +2604,25 @@ static struct rq *find_lock_later_rq(struct task_struct *task, struct rq *rq)
 	}
 
 	return later_rq;
+}
+
+static struct task_struct *pick_next_pushable_dl_task(struct rq *rq)
+{
+	struct task_struct *p;
+
+	if (!has_pushable_dl_tasks(rq))
+		return NULL;
+
+	p = __node_2_pdl(rb_first_cached(&rq->dl.pushable_dl_tasks_root));
+
+	WARN_ON_ONCE(rq->cpu != task_cpu(p));
+	WARN_ON_ONCE(task_current(rq, p));
+	WARN_ON_ONCE(p->nr_cpus_allowed <= 1);
+
+	WARN_ON_ONCE(!task_on_rq_queued(p));
+	WARN_ON_ONCE(!dl_task(p));
+
+	return p;
 }
 
 /*

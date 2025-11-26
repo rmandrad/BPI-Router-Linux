@@ -73,11 +73,8 @@ int mdiobus_register_device(struct mdio_device *mdiodev)
 			return err;
 
 		err = mdiobus_register_reset(mdiodev);
-		if (err) {
-			gpiod_put(mdiodev->reset_gpio);
-			mdiodev->reset_gpio = NULL;
+		if (err)
 			return err;
-		}
 
 		/* Assert the reset signal */
 		mdio_device_reset(mdiodev, 1);

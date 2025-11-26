@@ -1126,38 +1126,37 @@ static void smc_pnet_find_ism_by_pnetid(struct net_device *ndev,
  */
 void smc_pnet_find_roce_resource(struct sock *sk, struct smc_init_info *ini)
 {
-	struct net_device *dev;
-	struct dst_entry *dst;
+	struct dst_entry *dst = sk_dst_get(sk);
 
-	rcu_read_lock();
-	dst = __sk_dst_get(sk);
-	dev = dst ? dst_dev_rcu(dst) : NULL;
-	dev_hold(dev);
-	rcu_read_unlock();
+	if (!dst)
+		goto out;
+	if (!dst->dev)
+		goto out_rel;
 
-	if (dev) {
-		smc_pnet_find_roce_by_pnetid(dev, ini);
-		dev_put(dev);
-	}
+	smc_pnet_find_roce_by_pnetid(dst->dev, ini);
+
+out_rel:
+	dst_release(dst);
+out:
+	return;
 }
 
 void smc_pnet_find_ism_resource(struct sock *sk, struct smc_init_info *ini)
 {
-	struct net_device *dev;
-	struct dst_entry *dst;
+	struct dst_entry *dst = sk_dst_get(sk);
 
 	ini->ism_dev[0] = NULL;
+	if (!dst)
+		goto out;
+	if (!dst->dev)
+		goto out_rel;
 
-	rcu_read_lock();
-	dst = __sk_dst_get(sk);
-	dev = dst ? dst_dev_rcu(dst) : NULL;
-	dev_hold(dev);
-	rcu_read_unlock();
+	smc_pnet_find_ism_by_pnetid(dst->dev, ini);
 
-	if (dev) {
-		smc_pnet_find_ism_by_pnetid(dev, ini);
-		dev_put(dev);
-	}
+out_rel:
+	dst_release(dst);
+out:
+	return;
 }
 
 /* Lookup and apply a pnet table entry to the given ib device.

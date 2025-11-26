@@ -11,7 +11,6 @@
 #include <linux/mutex.h>
 #include <linux/property.h>
 #include <linux/slab.h>
-#include <linux/units.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/iio-opaque.h>
@@ -605,7 +604,7 @@ static int iio_convert_raw_to_processed_unlocked(struct iio_channel *chan,
 {
 	int scale_type, scale_val, scale_val2;
 	int offset_type, offset_val, offset_val2;
-	s64 denominator, raw64 = raw;
+	s64 raw64 = raw;
 
 	offset_type = iio_channel_read(chan, &offset_val, &offset_val2,
 				       IIO_CHAN_INFO_OFFSET);
@@ -640,7 +639,7 @@ static int iio_convert_raw_to_processed_unlocked(struct iio_channel *chan,
 		 * If no channel scaling is available apply consumer scale to
 		 * raw value and return.
 		 */
-		*processed = raw64 * scale;
+		*processed = raw * scale;
 		return 0;
 	}
 
@@ -649,19 +648,20 @@ static int iio_convert_raw_to_processed_unlocked(struct iio_channel *chan,
 		*processed = raw64 * scale_val * scale;
 		break;
 	case IIO_VAL_INT_PLUS_MICRO:
+		if (scale_val2 < 0)
+			*processed = -raw64 * scale_val * scale;
+		else
+			*processed = raw64 * scale_val * scale;
+		*processed += div_s64(raw64 * (s64)scale_val2 * scale,
+				      1000000LL);
+		break;
 	case IIO_VAL_INT_PLUS_NANO:
-		switch (scale_type) {
-		case IIO_VAL_INT_PLUS_MICRO:
-			denominator = MICRO;
-			break;
-		case IIO_VAL_INT_PLUS_NANO:
-			denominator = NANO;
-			break;
-		}
-		*processed = raw64 * scale * abs(scale_val);
-		*processed += div_s64(raw64 * scale * abs(scale_val2), denominator);
-		if (scale_val < 0 || scale_val2 < 0)
-			*processed *= -1;
+		if (scale_val2 < 0)
+			*processed = -raw64 * scale_val * scale;
+		else
+			*processed = raw64 * scale_val * scale;
+		*processed += div_s64(raw64 * (s64)scale_val2 * scale,
+				      1000000000LL);
 		break;
 	case IIO_VAL_FRACTIONAL:
 		*processed = div_s64(raw64 * (s64)scale_val * scale,

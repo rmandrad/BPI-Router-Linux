@@ -1673,7 +1673,7 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 			 * cache maintenance.
 			 */
 			if (!kvm_supports_cacheable_pfnmap())
-				ret = -EFAULT;
+				return -EFAULT;
 		} else {
 			/*
 			 * If the page was identified as device early by looking at
@@ -1696,12 +1696,7 @@ static int user_mem_abort(struct kvm_vcpu *vcpu, phys_addr_t fault_ipa,
 	}
 
 	if (exec_fault && s2_force_noncacheable)
-		ret = -ENOEXEC;
-
-	if (ret) {
-		kvm_release_page_unused(page);
-		return ret;
-	}
+		return -ENOEXEC;
 
 	/*
 	 * Potentially reduce shadow S2 permissions to match the guest's own

@@ -1082,7 +1082,6 @@ static int __init cpg_mssr_reserved_init(struct cpg_mssr_priv *priv,
 
 		of_for_each_phandle(&it, rc, node, "clocks", "#clock-cells", -1) {
 			int idx;
-			unsigned int *new_ids;
 
 			if (it.node != priv->np)
 				continue;
@@ -1093,13 +1092,11 @@ static int __init cpg_mssr_reserved_init(struct cpg_mssr_priv *priv,
 			if (args[0] != CPG_MOD)
 				continue;
 
-			new_ids = krealloc_array(ids, (num + 1), sizeof(*ids), GFP_KERNEL);
-			if (!new_ids) {
+			ids = krealloc_array(ids, (num + 1), sizeof(*ids), GFP_KERNEL);
+			if (!ids) {
 				of_node_put(it.node);
-				kfree(ids);
 				return -ENOMEM;
 			}
-			ids = new_ids;
 
 			if (priv->reg_layout == CLK_REG_LAYOUT_RZ_A)
 				idx = MOD_CLK_PACK_10(args[1]);	/* for DEF_MOD_STB() */

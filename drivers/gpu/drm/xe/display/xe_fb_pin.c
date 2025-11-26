@@ -16,7 +16,6 @@
 #include "xe_device.h"
 #include "xe_ggtt.h"
 #include "xe_pm.h"
-#include "xe_vram_types.h"
 
 static void
 write_dpt_rotated(struct xe_bo *bo, struct iosys_map *map, u32 *dpt_ofs, u32 bo_ofs,
@@ -290,7 +289,7 @@ static struct i915_vma *__xe_pin_fb_vma(const struct intel_framebuffer *fb,
 	if (IS_DGFX(to_xe_device(bo->ttm.base.dev)) &&
 	    intel_fb_rc_ccs_cc_plane(&fb->base) >= 0 &&
 	    !(bo->flags & XE_BO_FLAG_NEEDS_CPU_ACCESS)) {
-		struct xe_vram_region *vram = xe_device_get_root_tile(xe)->mem.vram;
+		struct xe_tile *tile = xe_device_get_root_tile(xe);
 
 		/*
 		 * If we need to able to access the clear-color value stored in
@@ -298,7 +297,7 @@ static struct i915_vma *__xe_pin_fb_vma(const struct intel_framebuffer *fb,
 		 * accessible.  This is important on small-bar systems where
 		 * only some subset of VRAM is CPU accessible.
 		 */
-		if (xe_vram_region_io_size(vram) < xe_vram_region_usable_size(vram)) {
+		if (tile->mem.vram.io_size < tile->mem.vram.usable_size) {
 			ret = -EINVAL;
 			goto err;
 		}

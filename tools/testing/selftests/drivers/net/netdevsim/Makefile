@@ -18,8 +18,4 @@ TEST_PROGS = devlink.sh \
 	tc-mq-visibility.sh \
 	udp_tunnel_nic.sh \
 
-TEST_FILES := \
-	ethtool-common.sh
-# end of TEST_FILES
-
 include ../../../lib.mk

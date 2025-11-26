@@ -351,27 +351,26 @@ static bool ipoib_is_dev_match_addr_rcu(const struct sockaddr *addr,
 }
 
 /*
- * Find the L2 master net_device on top of the given net_device.
+ * Find the master net_device on top of the given net_device.
  * @dev: base IPoIB net_device
  *
- * Returns the L2 master net_device with reference held if the L2 master
- * exists (such as bond netdevice), or returns same netdev with reference
- * held when master does not exist or when L3 master (such as VRF netdev).
+ * Returns the master net_device with a reference held, or the same net_device
+ * if no master exists.
  */
 static struct net_device *ipoib_get_master_net_dev(struct net_device *dev)
 {
 	struct net_device *master;
 
 	rcu_read_lock();
-
 	master = netdev_master_upper_dev_get_rcu(dev);
-	if (!master || netif_is_l3_master(master))
-		master = dev;
-
 	dev_hold(master);
 	rcu_read_unlock();
 
-	return master;
+	if (master)
+		return master;
+
+	dev_hold(dev);
+	return dev;
 }
 
 struct ipoib_walk_data {
@@ -523,7 +522,7 @@ static struct net_device *ipoib_get_net_dev_by_params(
 	if (ret)
 		return NULL;
 
-	/* See if we can find a unique device matching the pkey and GID */
+	/* See if we can find a unique device matching the L2 parameters */
 	matches = __ipoib_get_net_dev_by_params(dev_list, port, pkey_index,
 						gid, NULL, &net_dev);
 
@@ -536,7 +535,7 @@ static struct net_device *ipoib_get_net_dev_by_params(
 
 	dev_put(net_dev);
 
-	/* Couldn't find a unique device with pkey and GID only. Use L3
+	/* Couldn't find a unique device with L2 parameters only. Use L3
 	 * address to uniquely match the net device */
 	matches = __ipoib_get_net_dev_by_params(dev_list, port, pkey_index,
 						gid, addr, &net_dev);

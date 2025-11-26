@@ -71,7 +71,6 @@
  */
 
 #include <linux/ctype.h>
-#include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/export.h>
 #include <linux/hashtable.h>
@@ -90,9 +89,9 @@
 struct scmi_quirk {
 	bool enabled;
 	const char *name;
-	const char *vendor;
-	const char *sub_vendor_id;
-	const char *impl_ver_range;
+	char *vendor;
+	char *sub_vendor_id;
+	char *impl_ver_range;
 	u32 start_range;
 	u32 end_range;
 	struct static_key_false *key;
@@ -218,7 +217,7 @@ static unsigned int scmi_quirk_signature(const char *vend, const char *sub_vend)
 
 static int scmi_quirk_range_parse(struct scmi_quirk *quirk)
 {
-	const char *last, *first __free(kfree) = NULL;
+	const char *last, *first = quirk->impl_ver_range;
 	size_t len;
 	char *sep;
 	int ret;
@@ -229,12 +228,8 @@ static int scmi_quirk_range_parse(struct scmi_quirk *quirk)
 	if (!len)
 		return 0;
 
-	first = kmemdup(quirk->impl_ver_range, len + 1, GFP_KERNEL);
-	if (!first)
-		return -ENOMEM;
-
 	last = first + len - 1;
-	sep = strchr(first, '-');
+	sep = strchr(quirk->impl_ver_range, '-');
 	if (sep)
 		*sep = '\0';
 

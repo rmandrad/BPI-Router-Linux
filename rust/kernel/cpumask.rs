@@ -212,7 +212,6 @@ impl Cpumask {
 /// }
 /// assert_eq!(mask2.weight(), count);
 /// ```
-#[repr(transparent)]
 pub struct CpumaskVar {
     #[cfg(CONFIG_CPUMASK_OFFSTACK)]
     ptr: NonNull<Cpumask>,

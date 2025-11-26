@@ -134,7 +134,6 @@ DECLARE_EVENT_CLASS(dma_alloc_class,
 		__entry->dma_addr = dma_addr;
 		__entry->size = size;
 		__entry->flags = flags;
-		__entry->dir = dir;
 		__entry->attrs = attrs;
 	),
 

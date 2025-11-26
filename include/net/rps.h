@@ -25,16 +25,13 @@ struct rps_map {
 
 /*
  * The rps_dev_flow structure contains the mapping of a flow to a CPU, the
- * tail pointer for that CPU's input queue at the time of last enqueue, a
- * hardware filter index, and the hash of the flow if aRFS is enabled.
+ * tail pointer for that CPU's input queue at the time of last enqueue, and
+ * a hardware filter index.
  */
 struct rps_dev_flow {
 	u16		cpu;
 	u16		filter;
 	unsigned int	last_qtail;
-#ifdef CONFIG_RFS_ACCEL
-	u32		hash;
-#endif
 };
 #define RPS_NO_FILTER 0xffff
 

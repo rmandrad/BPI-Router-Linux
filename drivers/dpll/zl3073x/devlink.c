@@ -86,12 +86,14 @@ zl3073x_devlink_reload_down(struct devlink *devlink, bool netns_change,
 			    struct netlink_ext_ack *extack)
 {
 	struct zl3073x_dev *zldev = devlink_priv(devlink);
+	struct zl3073x_dpll *zldpll;
 
 	if (action != DEVLINK_RELOAD_ACTION_DRIVER_REINIT)
 		return -EOPNOTSUPP;
 
-	/* Stop normal operation */
-	zl3073x_dev_stop(zldev);
+	/* Unregister all DPLLs */
+	list_for_each_entry(zldpll, &zldev->dplls, list)
+		zl3073x_dpll_unregister(zldpll);
 
 	return 0;
 }
@@ -105,6 +107,7 @@ zl3073x_devlink_reload_up(struct devlink *devlink,
 {
 	struct zl3073x_dev *zldev = devlink_priv(devlink);
 	union devlink_param_value val;
+	struct zl3073x_dpll *zldpll;
 	int rc;
 
 	if (action != DEVLINK_RELOAD_ACTION_DRIVER_REINIT)
@@ -122,10 +125,13 @@ zl3073x_devlink_reload_up(struct devlink *devlink,
 		zldev->clock_id = val.vu64;
 	}
 
-	/* Restart normal operation */
-	rc = zl3073x_dev_start(zldev, false);
-	if (rc)
-		dev_warn(zldev->dev, "Failed to re-start normal operation\n");
+	/* Re-register all DPLLs */
+	list_for_each_entry(zldpll, &zldev->dplls, list) {
+		rc = zl3073x_dpll_register(zldpll);
+		if (rc)
+			dev_warn(zldev->dev,
+				 "Failed to re-register DPLL%u\n", zldpll->id);
+	}
 
 	*actions_performed = BIT(DEVLINK_RELOAD_ACTION_DRIVER_REINIT);
 

@@ -84,6 +84,7 @@ void radeon_driver_unload_kms(struct drm_device *dev)
 	rdev->agp = NULL;
 
 done_free:
+	kfree(rdev);
 	dev->dev_private = NULL;
 }
 

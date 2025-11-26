@@ -20,7 +20,6 @@
 #include <linux/cleanup.h>
 #include <linux/uio.h>
 #include "fuse_i.h"
-#include "fuse_dev_i.h"
 
 /* Used to help calculate the FUSE connection's max_pages limit for a request's
  * size. Parts of the struct fuse_req are sliced into scattergather lists in
@@ -373,7 +372,7 @@ static int virtio_fs_add_queues_sysfs(struct virtio_fs *fs)
 
 		sprintf(buff, "%d", i);
 		fsvq->kobj = kobject_create_and_add(buff, fs->mqs_kobj);
-		if (!fsvq->kobj) {
+		if (!fs->mqs_kobj) {
 			ret = -ENOMEM;
 			goto out_del;
 		}
@@ -1385,7 +1384,7 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	unsigned int out_sgs = 0;
 	unsigned int in_sgs = 0;
 	unsigned int total_sgs;
-	unsigned int i, hash;
+	unsigned int i;
 	int ret;
 	bool notify;
 	struct fuse_pqueue *fpq;
@@ -1445,9 +1444,8 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 
 	/* Request successfully sent. */
 	fpq = &fsvq->fud->pq;
-	hash = fuse_req_hash(req->in.h.unique);
 	spin_lock(&fpq->lock);
-	list_add_tail(&req->list, &fpq->processing[hash]);
+	list_add_tail(&req->list, fpq->processing);
 	spin_unlock(&fpq->lock);
 	set_bit(FR_SENT, &req->flags);
 	/* matches barrier in request_wait_answer() */

@@ -1883,32 +1883,35 @@ static int smc_vlan_by_tcpsk_walk(struct net_device *lower_dev,
 /* Determine vlan of internal TCP socket. */
 int smc_vlan_by_tcpsk(struct socket *clcsock, struct smc_init_info *ini)
 {
+	struct dst_entry *dst = sk_dst_get(clcsock->sk);
 	struct netdev_nested_priv priv;
 	struct net_device *ndev;
-	struct dst_entry *dst;
 	int rc = 0;
 
 	ini->vlan_id = 0;
-
-	rcu_read_lock();
-
-	dst = __sk_dst_get(clcsock->sk);
-	ndev = dst ? dst_dev_rcu(dst) : NULL;
-	if (!ndev) {
-		rc = -ENODEV;
+	if (!dst) {
+		rc = -ENOTCONN;
 		goto out;
 	}
+	if (!dst->dev) {
+		rc = -ENODEV;
+		goto out_rel;
+	}
 
+	ndev = dst->dev;
 	if (is_vlan_dev(ndev)) {
 		ini->vlan_id = vlan_dev_vlan_id(ndev);
-		goto out;
+		goto out_rel;
 	}
 
 	priv.data = (void *)&ini->vlan_id;
-	netdev_walk_all_lower_dev_rcu(ndev, smc_vlan_by_tcpsk_walk, &priv);
-out:
-	rcu_read_unlock();
+	rtnl_lock();
+	netdev_walk_all_lower_dev(ndev, smc_vlan_by_tcpsk_walk, &priv);
+	rtnl_unlock();
 
+out_rel:
+	dst_release(dst);
+out:
 	return rc;
 }
 

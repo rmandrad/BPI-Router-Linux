@@ -2768,12 +2768,7 @@ static void nilfs_segctor_destroy(struct nilfs_sc_info *sci)
 
 	if (sci->sc_task) {
 		wake_up(&sci->sc_wait_daemon);
-		if (kthread_stop(sci->sc_task)) {
-			spin_lock(&sci->sc_state_lock);
-			sci->sc_task = NULL;
-			timer_shutdown_sync(&sci->sc_timer);
-			spin_unlock(&sci->sc_state_lock);
-		}
+		kthread_stop(sci->sc_task);
 	}
 
 	spin_lock(&sci->sc_state_lock);

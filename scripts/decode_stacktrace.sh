@@ -255,11 +255,10 @@ handle_line() {
 		basepath=${basepath%/init/main.c:*)}
 	fi
 
-	local words spaces
+	local words
 
-	# Tokenize: words and spaces to preserve the alignment
-	read -ra words <<<"$1"
-	IFS='#' read -ra spaces <<<"$(shopt -s extglob; echo "${1//+([^[:space:]])/#}")"
+	# Tokenize
+	read -a words <<<"$1"
 
 	# Remove hex numbers. Do it ourselves until it happens in the
 	# kernel
@@ -271,9 +270,21 @@ handle_line() {
 	for i in "${!words[@]}"; do
 		# Remove the address
 		if [[ ${words[$i]} =~ \[\<([^]]+)\>\] ]]; then
-			unset words[$i] spaces[$i]
+			unset words[$i]
+		fi
+
+		# Format timestamps with tabs
+		if [[ ${words[$i]} == \[ && ${words[$i+1]} == *\] ]]; then
+			unset words[$i]
+			words[$i+1]=$(printf "[%13s\n" "${words[$i+1]}")
 		fi
 	done
+
+	if [[ ${words[$last]} =~ ^[0-9a-f]+\] ]]; then
+		words[$last-1]="${words[$last-1]} ${words[$last]}"
+		unset words[$last]
+		last=$(( $last - 1 ))
+	fi
 
 	# Extract info after the symbol if present. E.g.:
 	# func_name+0x54/0x80 (P)
@@ -283,15 +294,7 @@ handle_line() {
 	local info_str=""
 	if [[ ${words[$last]} =~ \([A-Z]*\) ]]; then
 		info_str=${words[$last]}
-		unset words[$last] spaces[$last]
-		last=$(( $last - 1 ))
-	fi
-
-	# Join module name with its build id if present, as these were
-	# split during tokenization (e.g. "[module" and "modbuildid]").
-	if [[ ${words[$last]} =~ ^[0-9a-f]+\] ]]; then
-		words[$last-1]="${words[$last-1]} ${words[$last]}"
-		unset words[$last] spaces[$last]
+		unset words[$last]
 		last=$(( $last - 1 ))
 	fi
 
@@ -308,7 +311,7 @@ handle_line() {
 			modbuildid=
 		fi
 		symbol=${words[$last-1]}
-		unset words[$last-1] spaces[$last-1]
+		unset words[$last-1]
 	else
 		# The symbol is the last element, process it
 		symbol=${words[$last]}
@@ -320,10 +323,12 @@ handle_line() {
 	parse_symbol # modifies $symbol
 
 	# Add up the line number to the symbol
-	for i in "${!words[@]}"; do
-		echo -n "${spaces[i]}${words[i]}"
-	done
-	echo "${spaces[$last]}${symbol}${module:+ ${module}}${info_str:+ ${info_str}}"
+	if [[ -z ${module} ]]
+	then
+		echo "${words[@]}" "$symbol ${info_str}"
+	else
+		echo "${words[@]}" "$symbol $module ${info_str}"
+	fi
 }
 
 while read line; do

@@ -193,8 +193,7 @@ static int xlnx_cdx_probe(struct platform_device *pdev)
 	cdx->ops = &cdx_ops;
 
 	/* Create MSI domain */
-	if (IS_ENABLED(CONFIG_GENERIC_MSI_IRQ))
-		cdx->msi_domain = cdx_msi_domain_init(&pdev->dev);
+	cdx->msi_domain = cdx_msi_domain_init(&pdev->dev);
 	if (!cdx->msi_domain) {
 		ret = dev_err_probe(&pdev->dev, -ENODEV, "cdx_msi_domain_init() failed");
 		goto cdx_msi_fail;

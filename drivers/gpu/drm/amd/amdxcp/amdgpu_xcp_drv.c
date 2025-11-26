@@ -46,29 +46,18 @@ static const struct drm_driver amdgpu_xcp_driver = {
 
 static int8_t pdev_num;
 static struct xcp_device *xcp_dev[MAX_XCP_PLATFORM_DEVICE];
-static DEFINE_MUTEX(xcp_mutex);
 
 int amdgpu_xcp_drm_dev_alloc(struct drm_device **ddev)
 {
 	struct platform_device *pdev;
 	struct xcp_device *pxcp_dev;
 	char dev_name[20];
-	int ret, i;
-
-	guard(mutex)(&xcp_mutex);
+	int ret;
 
 	if (pdev_num >= MAX_XCP_PLATFORM_DEVICE)
 		return -ENODEV;
 
-	for (i = 0; i < MAX_XCP_PLATFORM_DEVICE; i++) {
-		if (!xcp_dev[i])
-			break;
-	}
-
-	if (i >= MAX_XCP_PLATFORM_DEVICE)
-		return -ENODEV;
-
-	snprintf(dev_name, sizeof(dev_name), "amdgpu_xcp_%d", i);
+	snprintf(dev_name, sizeof(dev_name), "amdgpu_xcp_%d", pdev_num);
 	pdev = platform_device_register_simple(dev_name, -1, NULL, 0);
 	if (IS_ERR(pdev))
 		return PTR_ERR(pdev);
@@ -84,8 +73,8 @@ int amdgpu_xcp_drm_dev_alloc(struct drm_device **ddev)
 		goto out_devres;
 	}
 
-	xcp_dev[i] = pxcp_dev;
-	xcp_dev[i]->pdev = pdev;
+	xcp_dev[pdev_num] = pxcp_dev;
+	xcp_dev[pdev_num]->pdev = pdev;
 	*ddev = &pxcp_dev->drm;
 	pdev_num++;
 
@@ -100,43 +89,16 @@ out_unregister:
 }
 EXPORT_SYMBOL(amdgpu_xcp_drm_dev_alloc);
 
-static void free_xcp_dev(int8_t index)
+void amdgpu_xcp_drv_release(void)
 {
-	if ((index < MAX_XCP_PLATFORM_DEVICE) && (xcp_dev[index])) {
-		struct platform_device *pdev = xcp_dev[index]->pdev;
+	for (--pdev_num; pdev_num >= 0; --pdev_num) {
+		struct platform_device *pdev = xcp_dev[pdev_num]->pdev;
 
 		devres_release_group(&pdev->dev, NULL);
 		platform_device_unregister(pdev);
-
-		xcp_dev[index] = NULL;
-		pdev_num--;
+		xcp_dev[pdev_num] = NULL;
 	}
-}
-
-void amdgpu_xcp_drm_dev_free(struct drm_device *ddev)
-{
-	int8_t i;
-
-	guard(mutex)(&xcp_mutex);
-
-	for (i = 0; i < MAX_XCP_PLATFORM_DEVICE; i++) {
-		if ((xcp_dev[i]) && (&xcp_dev[i]->drm == ddev)) {
-			free_xcp_dev(i);
-			break;
-		}
-	}
-}
-EXPORT_SYMBOL(amdgpu_xcp_drm_dev_free);
-
-void amdgpu_xcp_drv_release(void)
-{
-	int8_t i;
-
-	guard(mutex)(&xcp_mutex);
-
-	for (i = 0; pdev_num && i < MAX_XCP_PLATFORM_DEVICE; i++) {
-		free_xcp_dev(i);
-	}
+	pdev_num = 0;
 }
 EXPORT_SYMBOL(amdgpu_xcp_drv_release);
 

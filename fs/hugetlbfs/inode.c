@@ -1054,7 +1054,7 @@ static int hugetlbfs_migrate_folio(struct address_space *mapping,
 	int rc;
 
 	rc = migrate_huge_page_move_mapping(mapping, dst, src);
-	if (rc)
+	if (rc != MIGRATEPAGE_SUCCESS)
 		return rc;
 
 	if (hugetlb_folio_subpool(src)) {
@@ -1065,7 +1065,7 @@ static int hugetlbfs_migrate_folio(struct address_space *mapping,
 
 	folio_migrate_flags(dst, src);
 
-	return 0;
+	return MIGRATEPAGE_SUCCESS;
 }
 #else
 #define hugetlbfs_migrate_folio NULL

@@ -501,7 +501,7 @@ static void *enabled_monitors_next(struct seq_file *m, void *p, loff_t *pos)
 
 	list_for_each_entry_continue(mon, &rv_monitors_list, list) {
 		if (mon->enabled)
-			return &mon->list;
+			return mon;
 	}
 
 	return NULL;
@@ -509,7 +509,7 @@ static void *enabled_monitors_next(struct seq_file *m, void *p, loff_t *pos)
 
 static void *enabled_monitors_start(struct seq_file *m, loff_t *pos)
 {
-	struct list_head *head;
+	struct rv_monitor *mon;
 	loff_t l;
 
 	mutex_lock(&rv_interface_lock);
@@ -517,15 +517,15 @@ static void *enabled_monitors_start(struct seq_file *m, loff_t *pos)
 	if (list_empty(&rv_monitors_list))
 		return NULL;
 
-	head = &rv_monitors_list;
+	mon = list_entry(&rv_monitors_list, struct rv_monitor, list);
 
 	for (l = 0; l <= *pos; ) {
-		head = enabled_monitors_next(m, head, &l);
-		if (!head)
+		mon = enabled_monitors_next(m, mon, &l);
+		if (!mon)
 			break;
 	}
 
-	return head;
+	return mon;
 }
 
 /*

@@ -119,7 +119,6 @@ int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
 	unsigned int num_plts = 0;
 	unsigned int num_gots = 0;
 	Elf_Rela *scratch = NULL;
-	Elf_Rela *new_scratch;
 	size_t scratch_size = 0;
 	int i;
 
@@ -169,12 +168,9 @@ int module_frob_arch_sections(Elf_Ehdr *ehdr, Elf_Shdr *sechdrs,
 		scratch_size_needed = (num_scratch_relas + num_relas) * sizeof(*scratch);
 		if (scratch_size_needed > scratch_size) {
 			scratch_size = scratch_size_needed;
-			new_scratch = kvrealloc(scratch, scratch_size, GFP_KERNEL);
-			if (!new_scratch) {
-				kvfree(scratch);
+			scratch = kvrealloc(scratch, scratch_size, GFP_KERNEL);
+			if (!scratch)
 				return -ENOMEM;
-			}
-			scratch = new_scratch;
 		}
 
 		for (size_t j = 0; j < num_relas; j++)

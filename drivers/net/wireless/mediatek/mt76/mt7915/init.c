@@ -702,9 +702,7 @@ mt7915_register_ext_phy(struct mt7915_dev *dev, struct mt7915_phy *phy)
 		mphy->macaddr[0] |= 2;
 		mphy->macaddr[0] ^= BIT(7);
 	}
-	ret = mt76_eeprom_override(mphy);
-	if (ret)
-		return ret;
+	mt76_eeprom_override(mphy);
 
 	/* init wiphy according to mphy and phy */
 	mt7915_init_wiphy(phy);

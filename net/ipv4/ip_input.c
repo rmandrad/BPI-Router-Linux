@@ -587,13 +587,9 @@ static void ip_sublist_rcv_finish(struct list_head *head)
 }
 
 static struct sk_buff *ip_extract_route_hint(const struct net *net,
-					     struct sk_buff *skb)
+					     struct sk_buff *skb, int rt_type)
 {
-	const struct iphdr *iph = ip_hdr(skb);
-
-	if (fib4_has_custom_rules(net) ||
-	    ipv4_is_lbcast(iph->daddr) ||
-	    ipv4_is_zeronet(iph->daddr) ||
+	if (fib4_has_custom_rules(net) || rt_type == RTN_BROADCAST ||
 	    IPCB(skb)->flags & IPSKB_MULTIPATH)
 		return NULL;
 
@@ -622,7 +618,8 @@ static void ip_list_rcv_finish(struct net *net, struct list_head *head)
 
 		dst = skb_dst(skb);
 		if (curr_dst != dst) {
-			hint = ip_extract_route_hint(net, skb);
+			hint = ip_extract_route_hint(net, skb,
+						     dst_rtable(dst)->rt_type);
 
 			/* dispatch old sublist */
 			if (!list_empty(&sublist))

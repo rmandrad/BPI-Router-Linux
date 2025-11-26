@@ -304,9 +304,6 @@ static int iomap_read_inline_data(const struct iomap_iter *iter,
 	size_t size = i_size_read(iter->inode) - iomap->offset;
 	size_t offset = offset_in_folio(folio, iomap->offset);
 
-	if (WARN_ON_ONCE(!iomap->inline_data))
-		return -EIO;
-
 	if (folio_test_uptodate(folio))
 		return 0;
 
@@ -897,7 +894,7 @@ static bool __iomap_write_end(struct inode *inode, loff_t pos, size_t len,
 	return true;
 }
 
-static bool iomap_write_end_inline(const struct iomap_iter *iter,
+static void iomap_write_end_inline(const struct iomap_iter *iter,
 		struct folio *folio, loff_t pos, size_t copied)
 {
 	const struct iomap *iomap = &iter->iomap;
@@ -906,16 +903,12 @@ static bool iomap_write_end_inline(const struct iomap_iter *iter,
 	WARN_ON_ONCE(!folio_test_uptodate(folio));
 	BUG_ON(!iomap_inline_data_valid(iomap));
 
-	if (WARN_ON_ONCE(!iomap->inline_data))
-		return false;
-
 	flush_dcache_folio(folio);
 	addr = kmap_local_folio(folio, pos);
 	memcpy(iomap_inline_data(iomap, pos), addr, copied);
 	kunmap_local(addr);
 
 	mark_inode_dirty(iter->inode);
-	return true;
 }
 
 /*
@@ -928,8 +921,10 @@ static bool iomap_write_end(struct iomap_iter *iter, size_t len, size_t copied,
 	const struct iomap *srcmap = iomap_iter_srcmap(iter);
 	loff_t pos = iter->pos;
 
-	if (srcmap->type == IOMAP_INLINE)
-		return iomap_write_end_inline(iter, folio, pos, copied);
+	if (srcmap->type == IOMAP_INLINE) {
+		iomap_write_end_inline(iter, folio, pos, copied);
+		return true;
+	}
 
 	if (srcmap->flags & IOMAP_F_BUFFER_HEAD) {
 		size_t bh_written;

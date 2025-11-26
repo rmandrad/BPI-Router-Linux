@@ -10,7 +10,6 @@
 
 #define pr_fmt(fmt) "kprobes: " fmt
 
-#include <linux/execmem.h>
 #include <linux/extable.h>
 #include <linux/kasan.h>
 #include <linux/kernel.h>
@@ -41,20 +40,6 @@ DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 
 static void __kprobes
 post_kprobe_handler(struct kprobe *, struct kprobe_ctlblk *, struct pt_regs *);
-
-void *alloc_insn_page(void)
-{
-	void *addr;
-
-	addr = execmem_alloc(EXECMEM_KPROBES, PAGE_SIZE);
-	if (!addr)
-		return NULL;
-	if (set_memory_rox((unsigned long)addr, 1)) {
-		execmem_free(addr);
-		return NULL;
-	}
-	return addr;
-}
 
 static void __kprobes arch_prepare_ss_slot(struct kprobe *p)
 {

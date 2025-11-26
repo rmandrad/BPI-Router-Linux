@@ -470,7 +470,7 @@ static int axp288_extcon_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	devm_device_init_wakeup(dev);
+	device_init_wakeup(dev, true);
 	platform_set_drvdata(pdev, info);
 
 	return 0;

@@ -108,12 +108,6 @@ static int report_normal_detected(struct pci_dev *dev, void *data)
 	return report_error_detected(dev, pci_channel_io_normal, data);
 }
 
-static int report_perm_failure_detected(struct pci_dev *dev, void *data)
-{
-	pci_uevent_ers(dev, PCI_ERS_RESULT_DISCONNECT);
-	return 0;
-}
-
 static int report_mmio_enabled(struct pci_dev *dev, void *data)
 {
 	struct pci_driver *pdrv;
@@ -141,8 +135,7 @@ static int report_slot_reset(struct pci_dev *dev, void *data)
 
 	device_lock(&dev->dev);
 	pdrv = dev->driver;
-	if (!pci_dev_set_io_state(dev, pci_channel_io_normal) ||
-	    !pdrv || !pdrv->err_handler || !pdrv->err_handler->slot_reset)
+	if (!pdrv || !pdrv->err_handler || !pdrv->err_handler->slot_reset)
 		goto out;
 
 	err_handler = pdrv->err_handler;
@@ -276,7 +269,7 @@ pci_ers_result_t pcie_do_recovery(struct pci_dev *dev,
 failed:
 	pci_walk_bridge(bridge, pci_pm_runtime_put, NULL);
 
-	pci_walk_bridge(bridge, report_perm_failure_detected, NULL);
+	pci_uevent_ers(bridge, PCI_ERS_RESULT_DISCONNECT);
 
 	pci_info(bridge, "device recovery failed\n");
 

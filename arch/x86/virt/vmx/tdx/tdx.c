@@ -1502,6 +1502,11 @@ static inline u64 tdx_tdr_pa(struct tdx_td *td)
 	return page_to_phys(td->tdr_page);
 }
 
+static inline u64 tdx_tdvpr_pa(struct tdx_vp *td)
+{
+	return page_to_phys(td->tdvpr_page);
+}
+
 /*
  * The TDX module exposes a CLFLUSH_BEFORE_ALLOC bit to specify whether
  * a CLFLUSH of pages is required before handing them to the TDX module.
@@ -1513,9 +1518,9 @@ static void tdx_clflush_page(struct page *page)
 	clflush_cache_range(page_to_virt(page), PAGE_SIZE);
 }
 
-noinstr u64 tdh_vp_enter(struct tdx_vp *td, struct tdx_module_args *args)
+noinstr __flatten u64 tdh_vp_enter(struct tdx_vp *td, struct tdx_module_args *args)
 {
-	args->rcx = td->tdvpr_pa;
+	args->rcx = tdx_tdvpr_pa(td);
 
 	return __seamcall_saved_ret(TDH_VP_ENTER, args);
 }
@@ -1576,7 +1581,7 @@ u64 tdh_vp_addcx(struct tdx_vp *vp, struct page *tdcx_page)
 {
 	struct tdx_module_args args = {
 		.rcx = page_to_phys(tdcx_page),
-		.rdx = vp->tdvpr_pa,
+		.rdx = tdx_tdvpr_pa(vp),
 	};
 
 	tdx_clflush_page(tdcx_page);
@@ -1645,7 +1650,7 @@ EXPORT_SYMBOL_GPL(tdh_mng_create);
 u64 tdh_vp_create(struct tdx_td *td, struct tdx_vp *vp)
 {
 	struct tdx_module_args args = {
-		.rcx = vp->tdvpr_pa,
+		.rcx = tdx_tdvpr_pa(vp),
 		.rdx = tdx_tdr_pa(td),
 	};
 
@@ -1701,7 +1706,7 @@ EXPORT_SYMBOL_GPL(tdh_mr_finalize);
 u64 tdh_vp_flush(struct tdx_vp *vp)
 {
 	struct tdx_module_args args = {
-		.rcx = vp->tdvpr_pa,
+		.rcx = tdx_tdvpr_pa(vp),
 	};
 
 	return seamcall(TDH_VP_FLUSH, &args);
@@ -1747,7 +1752,7 @@ EXPORT_SYMBOL_GPL(tdh_mng_init);
 u64 tdh_vp_rd(struct tdx_vp *vp, u64 field, u64 *data)
 {
 	struct tdx_module_args args = {
-		.rcx = vp->tdvpr_pa,
+		.rcx = tdx_tdvpr_pa(vp),
 		.rdx = field,
 	};
 	u64 ret;
@@ -1764,7 +1769,7 @@ EXPORT_SYMBOL_GPL(tdh_vp_rd);
 u64 tdh_vp_wr(struct tdx_vp *vp, u64 field, u64 data, u64 mask)
 {
 	struct tdx_module_args args = {
-		.rcx = vp->tdvpr_pa,
+		.rcx = tdx_tdvpr_pa(vp),
 		.rdx = field,
 		.r8 = data,
 		.r9 = mask,
@@ -1777,7 +1782,7 @@ EXPORT_SYMBOL_GPL(tdh_vp_wr);
 u64 tdh_vp_init(struct tdx_vp *vp, u64 initial_rcx, u32 x2apicid)
 {
 	struct tdx_module_args args = {
-		.rcx = vp->tdvpr_pa,
+		.rcx = tdx_tdvpr_pa(vp),
 		.rdx = initial_rcx,
 		.r8 = x2apicid,
 	};

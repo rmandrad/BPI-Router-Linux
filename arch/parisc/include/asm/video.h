@@ -6,7 +6,7 @@
 
 struct device;
 
-#if defined(CONFIG_STI_CORE) && defined(CONFIG_VIDEO)
+#if defined(CONFIG_STI_CORE)
 bool video_is_primary_device(struct device *dev);
 #define video_is_primary_device video_is_primary_device
 #endif

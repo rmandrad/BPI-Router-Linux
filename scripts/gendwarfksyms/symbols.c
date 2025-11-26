@@ -128,7 +128,7 @@ static bool is_exported(const char *name)
 	return for_each(name, NULL, NULL) > 0;
 }
 
-int symbol_read_exports(FILE *file)
+void symbol_read_exports(FILE *file)
 {
 	struct symbol *sym;
 	char *line = NULL;
@@ -159,8 +159,6 @@ int symbol_read_exports(FILE *file)
 
 	free(line);
 	debug("%d exported symbols", nsym);
-
-	return nsym;
 }
 
 static void get_symbol(struct symbol *sym, void *arg)

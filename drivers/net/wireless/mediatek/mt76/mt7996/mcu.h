@@ -481,8 +481,7 @@ struct bss_mld_tlv {
 	u8 own_mld_id;
 	u8 mac_addr[ETH_ALEN];
 	u8 remap_idx;
-	u8 link_id;
-	u8 __rsv[2];
+	u8 __rsv[3];
 } __packed;
 
 struct sta_rec_ht_uni {

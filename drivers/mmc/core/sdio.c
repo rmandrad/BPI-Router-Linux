@@ -945,11 +945,7 @@ static void mmc_sdio_remove(struct mmc_host *host)
  */
 static int mmc_sdio_alive(struct mmc_host *host)
 {
-	if (!mmc_host_is_spi(host))
-		return mmc_select_card(host->card);
-	else
-		return mmc_io_rw_direct(host->card, 0, 0, SDIO_CCCR_CCCR, 0,
-					NULL);
+	return mmc_select_card(host->card);
 }
 
 /*

@@ -130,8 +130,9 @@ struct iova_bitmap {
 static unsigned long iova_bitmap_offset_to_index(struct iova_bitmap *bitmap,
 						 unsigned long iova)
 {
-	return (iova >> bitmap->mapped.pgshift) /
-	       BITS_PER_TYPE(*bitmap->bitmap);
+	unsigned long pgsize = 1UL << bitmap->mapped.pgshift;
+
+	return iova / (BITS_PER_TYPE(*bitmap->bitmap) * pgsize);
 }
 
 /*

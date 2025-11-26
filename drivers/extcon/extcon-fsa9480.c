@@ -317,7 +317,7 @@ static int fsa9480_probe(struct i2c_client *client)
 		return ret;
 	}
 
-	devm_device_init_wakeup(info->dev);
+	device_init_wakeup(info->dev, true);
 	fsa9480_detect_dev(info);
 
 	return 0;

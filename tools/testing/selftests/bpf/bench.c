@@ -499,7 +499,7 @@ extern const struct bench bench_rename_rawtp;
 extern const struct bench bench_rename_fentry;
 extern const struct bench bench_rename_fexit;
 
-/* pure counting benchmarks to establish theoretical limits */
+/* pure counting benchmarks to establish theoretical lmits */
 extern const struct bench bench_trig_usermode_count;
 extern const struct bench bench_trig_syscall_count;
 extern const struct bench bench_trig_kernel_count;

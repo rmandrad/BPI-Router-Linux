@@ -314,7 +314,6 @@ static int dw_i2c_plat_probe(struct platform_device *pdev)
 
 exit_probe:
 	dw_i2c_plat_pm_cleanup(dev);
-	i2c_dw_prepare_clk(dev, false);
 exit_reset:
 	reset_control_assert(dev->rst);
 	return ret;
@@ -332,10 +331,8 @@ static void dw_i2c_plat_remove(struct platform_device *pdev)
 	i2c_dw_disable(dev);
 
 	pm_runtime_dont_use_autosuspend(device);
-	pm_runtime_put_noidle(device);
+	pm_runtime_put_sync(device);
 	dw_i2c_plat_pm_cleanup(dev);
-
-	i2c_dw_prepare_clk(dev, false);
 
 	i2c_dw_remove_lock_support(dev);
 

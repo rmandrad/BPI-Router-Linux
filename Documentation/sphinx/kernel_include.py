@@ -35,14 +35,12 @@
 import os.path
 
 from docutils import io, nodes, statemachine
+from docutils.utils.error_reporting import SafeString, ErrorString
 from docutils.parsers.rst import directives
 from docutils.parsers.rst.directives.body import CodeBlock, NumberLines
 from docutils.parsers.rst.directives.misc import Include
 
 __version__  = '1.0'
-
-def ErrorString(exc):  # Shamelessly stolen from docutils
-    return f'{exc.__class__.__name}: {exc}'
 
 # ==============================================================================
 def setup(app):
@@ -114,7 +112,7 @@ class KernelInclude(Include):
             raise self.severe('Problems with "%s" directive path:\n'
                               'Cannot encode input file path "%s" '
                               '(wrong locale?).' %
-                              (self.name, path))
+                              (self.name, SafeString(path)))
         except IOError as error:
             raise self.severe('Problems with "%s" directive path:\n%s.' %
                       (self.name, ErrorString(error)))

@@ -329,7 +329,6 @@ retry_open:
 					       parent_cfid->fid.lease_key,
 					       SMB2_LEASE_KEY_SIZE);
 					parent_cfid->dirents.is_valid = false;
-					parent_cfid->dirents.is_failed = true;
 				}
 				break;
 			}

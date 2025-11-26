@@ -284,7 +284,9 @@ int mt7915_eeprom_init(struct mt7915_dev *dev)
 	memcpy(dev->mphy.macaddr, dev->mt76.eeprom.data + MT_EE_MAC_ADDR,
 	       ETH_ALEN);
 
-	return mt76_eeprom_override(&dev->mphy);
+	mt76_eeprom_override(&dev->mphy);
+
+	return 0;
 }
 
 int mt7915_eeprom_get_target_power(struct mt7915_dev *dev,

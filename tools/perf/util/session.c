@@ -1402,7 +1402,7 @@ static s64 perf_session__process_user_event(struct perf_session *session,
 	const struct perf_tool *tool = session->tool;
 	struct perf_sample sample;
 	int fd = perf_data__fd(session->data);
-	s64 err;
+	int err;
 
 	perf_sample__init(&sample, /*all=*/true);
 	if ((event->header.type != PERF_RECORD_COMPRESSED &&

@@ -832,8 +832,6 @@ static void noinstr el0_breakpt(struct pt_regs *regs, unsigned long esr)
 
 static void noinstr el0_softstp(struct pt_regs *regs, unsigned long esr)
 {
-	bool step_done;
-
 	if (!is_ttbr0_addr(regs->pc))
 		arm64_apply_bp_hardening();
 
@@ -844,10 +842,10 @@ static void noinstr el0_softstp(struct pt_regs *regs, unsigned long esr)
 	 * If we are stepping a suspended breakpoint there's nothing more to do:
 	 * the single-step is complete.
 	 */
-	step_done = try_step_suspended_breakpoints(regs);
-	local_daif_restore(DAIF_PROCCTX);
-	if (!step_done)
+	if (!try_step_suspended_breakpoints(regs)) {
+		local_daif_restore(DAIF_PROCCTX);
 		do_el0_softstep(esr, regs);
+	}
 	exit_to_user_mode(regs);
 }
 

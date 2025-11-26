@@ -1919,7 +1919,6 @@ static struct folio *shmem_alloc_and_add_folio(struct vm_fault *vmf,
 	struct shmem_inode_info *info = SHMEM_I(inode);
 	unsigned long suitable_orders = 0;
 	struct folio *folio = NULL;
-	pgoff_t aligned_index;
 	long pages;
 	int error, order;
 
@@ -1933,12 +1932,10 @@ static struct folio *shmem_alloc_and_add_folio(struct vm_fault *vmf,
 		order = highest_order(suitable_orders);
 		while (suitable_orders) {
 			pages = 1UL << order;
-			aligned_index = round_down(index, pages);
-			folio = shmem_alloc_folio(gfp, order, info, aligned_index);
-			if (folio) {
-				index = aligned_index;
+			index = round_down(index, pages);
+			folio = shmem_alloc_folio(gfp, order, info, index);
+			if (folio)
 				goto allocated;
-			}
 
 			if (pages == HPAGE_PMD_NR)
 				count_vm_event(THP_FILE_FALLBACK);

@@ -182,12 +182,10 @@ static int agilent_82350b_accel_write(struct gpib_board *board, u8 *buffer,
 		return retval;
 #endif
 
-	if (fifotransferlength > 0) {
-		retval = agilent_82350b_write(board, buffer, 1, 0, &num_bytes);
-		*bytes_written += num_bytes;
-		if (retval < 0)
-			return retval;
-	}
+	retval = agilent_82350b_write(board, buffer, 1, 0, &num_bytes);
+	*bytes_written += num_bytes;
+	if (retval < 0)
+		return retval;
 
 	write_byte(tms_priv, tms_priv->imr0_bits & ~HR_BOIE, IMR0);
 	for (i = 1; i < fifotransferlength;) {
@@ -219,7 +217,7 @@ static int agilent_82350b_accel_write(struct gpib_board *board, u8 *buffer,
 			break;
 	}
 	write_byte(tms_priv, tms_priv->imr0_bits, IMR0);
-	if (retval < 0)
+	if (retval)
 		return retval;
 
 	if (send_eoi) {

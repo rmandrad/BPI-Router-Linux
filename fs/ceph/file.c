@@ -579,7 +579,8 @@ static void wake_async_create_waiters(struct inode *inode,
 
 	spin_lock(&ci->i_ceph_lock);
 	if (ci->i_ceph_flags & CEPH_I_ASYNC_CREATE) {
-		clear_and_wake_up_bit(CEPH_ASYNC_CREATE_BIT, &ci->i_ceph_flags);
+		ci->i_ceph_flags &= ~CEPH_I_ASYNC_CREATE;
+		wake_up_bit(&ci->i_ceph_flags, CEPH_ASYNC_CREATE_BIT);
 
 		if (ci->i_ceph_flags & CEPH_I_ASYNC_CHECK_CAPS) {
 			ci->i_ceph_flags &= ~CEPH_I_ASYNC_CHECK_CAPS;
@@ -761,7 +762,8 @@ static int ceph_finish_async_create(struct inode *dir, struct inode *inode,
 	}
 
 	spin_lock(&dentry->d_lock);
-	clear_and_wake_up_bit(CEPH_DENTRY_ASYNC_CREATE_BIT, &di->flags);
+	di->flags &= ~CEPH_DENTRY_ASYNC_CREATE;
+	wake_up_bit(&di->flags, CEPH_DENTRY_ASYNC_CREATE_BIT);
 	spin_unlock(&dentry->d_lock);
 
 	return ret;

@@ -90,10 +90,10 @@
 };
 
 &keys {
-	pinctrl-0 = <&nmi_pins>;
-	pinctrl-names = "default";
-
 	key-sleep {
+		pinctrl-0 = <&nmi_pins>;
+		pinctrl-names = "default";
+
 		interrupts-extended = <&icu 0 IRQ_TYPE_EDGE_FALLING>;
 		linux,code = <KEY_SLEEP>;
 		label = "SLEEP";

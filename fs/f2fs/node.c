@@ -27,17 +27,12 @@ static struct kmem_cache *free_nid_slab;
 static struct kmem_cache *nat_entry_set_slab;
 static struct kmem_cache *fsync_node_entry_slab;
 
-static inline bool is_invalid_nid(struct f2fs_sb_info *sbi, nid_t nid)
-{
-	return nid < F2FS_ROOT_INO(sbi) || nid >= NM_I(sbi)->max_nid;
-}
-
 /*
  * Check whether the given nid is within node id range.
  */
 int f2fs_check_nid_range(struct f2fs_sb_info *sbi, nid_t nid)
 {
-	if (unlikely(is_invalid_nid(sbi, nid))) {
+	if (unlikely(nid < F2FS_ROOT_INO(sbi) || nid >= NM_I(sbi)->max_nid)) {
 		set_sbi_flag(sbi, SBI_NEED_FSCK);
 		f2fs_warn(sbi, "%s: out-of-range nid=%x, run fsck to fix.",
 			  __func__, nid);
@@ -876,8 +871,7 @@ int f2fs_get_dnode_of_data(struct dnode_of_data *dn, pgoff_t index, int mode)
 		}
 
 		if (!done) {
-			nfolio[i] = f2fs_get_node_folio(sbi, nids[i],
-						NODE_TYPE_NON_INODE);
+			nfolio[i] = f2fs_get_node_folio(sbi, nids[i]);
 			if (IS_ERR(nfolio[i])) {
 				err = PTR_ERR(nfolio[i]);
 				f2fs_folio_put(nfolio[0], false);
@@ -995,7 +989,7 @@ static int truncate_dnode(struct dnode_of_data *dn)
 		return 1;
 
 	/* get direct node */
-	folio = f2fs_get_node_folio(sbi, dn->nid, NODE_TYPE_NON_INODE);
+	folio = f2fs_get_node_folio(sbi, dn->nid);
 	if (PTR_ERR(folio) == -ENOENT)
 		return 1;
 	else if (IS_ERR(folio))
@@ -1039,8 +1033,7 @@ static int truncate_nodes(struct dnode_of_data *dn, unsigned int nofs,
 
 	trace_f2fs_truncate_nodes_enter(dn->inode, dn->nid, dn->data_blkaddr);
 
-	folio = f2fs_get_node_folio(F2FS_I_SB(dn->inode), dn->nid,
-						NODE_TYPE_NON_INODE);
+	folio = f2fs_get_node_folio(F2FS_I_SB(dn->inode), dn->nid);
 	if (IS_ERR(folio)) {
 		trace_f2fs_truncate_nodes_exit(dn->inode, PTR_ERR(folio));
 		return PTR_ERR(folio);
@@ -1118,8 +1111,7 @@ static int truncate_partial_nodes(struct dnode_of_data *dn,
 	/* get indirect nodes in the path */
 	for (i = 0; i < idx + 1; i++) {
 		/* reference count'll be increased */
-		folios[i] = f2fs_get_node_folio(F2FS_I_SB(dn->inode), nid[i],
-							NODE_TYPE_NON_INODE);
+		folios[i] = f2fs_get_node_folio(F2FS_I_SB(dn->inode), nid[i]);
 		if (IS_ERR(folios[i])) {
 			err = PTR_ERR(folios[i]);
 			idx = i - 1;
@@ -1504,37 +1496,21 @@ static int sanity_check_node_footer(struct f2fs_sb_info *sbi,
 					struct folio *folio, pgoff_t nid,
 					enum node_type ntype)
 {
-	if (unlikely(nid != nid_of_node(folio)))
-		goto out_err;
-
-	switch (ntype) {
-	case NODE_TYPE_INODE:
-		if (!IS_INODE(folio))
-			goto out_err;
-		break;
-	case NODE_TYPE_XATTR:
-		if (!f2fs_has_xattr_block(ofs_of_node(folio)))
-			goto out_err;
-		break;
-	case NODE_TYPE_NON_INODE:
-		if (IS_INODE(folio))
-			goto out_err;
-		break;
-	default:
-		break;
+	if (unlikely(nid != nid_of_node(folio) ||
+		(ntype == NODE_TYPE_INODE && !IS_INODE(folio)) ||
+		(ntype == NODE_TYPE_XATTR &&
+		!f2fs_has_xattr_block(ofs_of_node(folio))) ||
+		time_to_inject(sbi, FAULT_INCONSISTENT_FOOTER))) {
+		f2fs_warn(sbi, "inconsistent node block, node_type:%d, nid:%lu, "
+			  "node_footer[nid:%u,ino:%u,ofs:%u,cpver:%llu,blkaddr:%u]",
+			  ntype, nid, nid_of_node(folio), ino_of_node(folio),
+			  ofs_of_node(folio), cpver_of_node(folio),
+			  next_blkaddr_of_node(folio));
+		set_sbi_flag(sbi, SBI_NEED_FSCK);
+		f2fs_handle_error(sbi, ERROR_INCONSISTENT_FOOTER);
+		return -EFSCORRUPTED;
 	}
-	if (time_to_inject(sbi, FAULT_INCONSISTENT_FOOTER))
-		goto out_err;
 	return 0;
-out_err:
-	f2fs_warn(sbi, "inconsistent node block, node_type:%d, nid:%lu, "
-		  "node_footer[nid:%u,ino:%u,ofs:%u,cpver:%llu,blkaddr:%u]",
-		  ntype, nid, nid_of_node(folio), ino_of_node(folio),
-		  ofs_of_node(folio), cpver_of_node(folio),
-		  next_blkaddr_of_node(folio));
-	set_sbi_flag(sbi, SBI_NEED_FSCK);
-	f2fs_handle_error(sbi, ERROR_INCONSISTENT_FOOTER);
-	return -EFSCORRUPTED;
 }
 
 static struct folio *__get_node_folio(struct f2fs_sb_info *sbi, pgoff_t nid,
@@ -1591,10 +1567,9 @@ out_put_err:
 	return ERR_PTR(err);
 }
 
-struct folio *f2fs_get_node_folio(struct f2fs_sb_info *sbi, pgoff_t nid,
-						enum node_type node_type)
+struct folio *f2fs_get_node_folio(struct f2fs_sb_info *sbi, pgoff_t nid)
 {
-	return __get_node_folio(sbi, nid, NULL, 0, node_type);
+	return __get_node_folio(sbi, nid, NULL, 0, NODE_TYPE_REGULAR);
 }
 
 struct folio *f2fs_get_inode_folio(struct f2fs_sb_info *sbi, pgoff_t ino)
@@ -2659,16 +2634,6 @@ retry:
 		f2fs_bug_on(sbi, list_empty(&nm_i->free_nid_list));
 		i = list_first_entry(&nm_i->free_nid_list,
 					struct free_nid, list);
-
-		if (unlikely(is_invalid_nid(sbi, i->nid))) {
-			spin_unlock(&nm_i->nid_list_lock);
-			f2fs_err(sbi, "Corrupted nid %u in free_nid_list",
-								i->nid);
-			f2fs_stop_checkpoint(sbi, false,
-					STOP_CP_REASON_CORRUPTED_NID);
-			return false;
-		}
-
 		*nid = i->nid;
 
 		__move_free_nid(sbi, i, FREE_NID, PREALLOC_NID);

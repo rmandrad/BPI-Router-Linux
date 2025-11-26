@@ -70,10 +70,8 @@ static int lzo_sdecompress(struct crypto_scomp *tfm, const u8 *src,
 }
 
 static struct scomp_alg scomp = {
-	.streams		= {
-		.alloc_ctx	= lzo_alloc_ctx,
-		.free_ctx	= lzo_free_ctx,
-	},
+	.alloc_ctx		= lzo_alloc_ctx,
+	.free_ctx		= lzo_free_ctx,
 	.compress		= lzo_scompress,
 	.decompress		= lzo_sdecompress,
 	.base			= {

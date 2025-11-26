@@ -464,7 +464,7 @@ static ssize_t description_show(struct device *dev,
 
 	buf[result++] = '\n';
 
-	ACPI_FREE(str_obj);
+	kfree(str_obj);
 
 	return result;
 }

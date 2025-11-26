@@ -13,7 +13,6 @@
  *    Copyright (C) 2002 Randolph Chung <tausq with parisc-linux.org>
  *    Copyright (C) 2003 James Bottomley <jejb at parisc-linux.org>
  */
-#define COMPILE_OFFSETS
 
 #include <linux/types.h>
 #include <linux/sched.h>

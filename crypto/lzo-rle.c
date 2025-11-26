@@ -70,10 +70,8 @@ static int lzorle_sdecompress(struct crypto_scomp *tfm, const u8 *src,
 }
 
 static struct scomp_alg scomp = {
-	.streams		= {
-		.alloc_ctx	= lzorle_alloc_ctx,
-		.free_ctx	= lzorle_free_ctx,
-	},
+	.alloc_ctx		= lzorle_alloc_ctx,
+	.free_ctx		= lzorle_free_ctx,
 	.compress		= lzorle_scompress,
 	.decompress		= lzorle_sdecompress,
 	.base			= {

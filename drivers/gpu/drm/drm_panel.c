@@ -134,9 +134,6 @@ void drm_panel_prepare(struct drm_panel *panel)
 	panel->prepared = true;
 
 	list_for_each_entry(follower, &panel->followers, list) {
-		if (!follower->funcs->panel_prepared)
-			continue;
-
 		ret = follower->funcs->panel_prepared(follower);
 		if (ret < 0)
 			dev_info(panel->dev, "%ps failed: %d\n",
@@ -182,9 +179,6 @@ void drm_panel_unprepare(struct drm_panel *panel)
 	mutex_lock(&panel->follower_lock);
 
 	list_for_each_entry(follower, &panel->followers, list) {
-		if (!follower->funcs->panel_unpreparing)
-			continue;
-
 		ret = follower->funcs->panel_unpreparing(follower);
 		if (ret < 0)
 			dev_info(panel->dev, "%ps failed: %d\n",
@@ -215,7 +209,6 @@ EXPORT_SYMBOL(drm_panel_unprepare);
  */
 void drm_panel_enable(struct drm_panel *panel)
 {
-	struct drm_panel_follower *follower;
 	int ret;
 
 	if (!panel)
@@ -226,12 +219,10 @@ void drm_panel_enable(struct drm_panel *panel)
 		return;
 	}
 
-	mutex_lock(&panel->follower_lock);
-
 	if (panel->funcs && panel->funcs->enable) {
 		ret = panel->funcs->enable(panel);
 		if (ret < 0)
-			goto exit;
+			return;
 	}
 	panel->enabled = true;
 
@@ -239,19 +230,6 @@ void drm_panel_enable(struct drm_panel *panel)
 	if (ret < 0)
 		DRM_DEV_INFO(panel->dev, "failed to enable backlight: %d\n",
 			     ret);
-
-	list_for_each_entry(follower, &panel->followers, list) {
-		if (!follower->funcs->panel_enabled)
-			continue;
-
-		ret = follower->funcs->panel_enabled(follower);
-		if (ret < 0)
-			dev_info(panel->dev, "%ps failed: %d\n",
-				 follower->funcs->panel_enabled, ret);
-	}
-
-exit:
-	mutex_unlock(&panel->follower_lock);
 }
 EXPORT_SYMBOL(drm_panel_enable);
 
@@ -265,7 +243,6 @@ EXPORT_SYMBOL(drm_panel_enable);
  */
 void drm_panel_disable(struct drm_panel *panel)
 {
-	struct drm_panel_follower *follower;
 	int ret;
 
 	if (!panel)
@@ -285,18 +262,6 @@ void drm_panel_disable(struct drm_panel *panel)
 		return;
 	}
 
-	mutex_lock(&panel->follower_lock);
-
-	list_for_each_entry(follower, &panel->followers, list) {
-		if (!follower->funcs->panel_disabling)
-			continue;
-
-		ret = follower->funcs->panel_disabling(follower);
-		if (ret < 0)
-			dev_info(panel->dev, "%ps failed: %d\n",
-				 follower->funcs->panel_disabling, ret);
-	}
-
 	ret = backlight_disable(panel->backlight);
 	if (ret < 0)
 		DRM_DEV_INFO(panel->dev, "failed to disable backlight: %d\n",
@@ -305,12 +270,9 @@ void drm_panel_disable(struct drm_panel *panel)
 	if (panel->funcs && panel->funcs->disable) {
 		ret = panel->funcs->disable(panel);
 		if (ret < 0)
-			goto exit;
+			return;
 	}
 	panel->enabled = false;
-
-exit:
-	mutex_unlock(&panel->follower_lock);
 }
 EXPORT_SYMBOL(drm_panel_disable);
 
@@ -577,13 +539,13 @@ EXPORT_SYMBOL(drm_is_panel_follower);
  * @follower_dev: The 'struct device' for the follower.
  * @follower:     The panel follower descriptor for the follower.
  *
- * A panel follower is called right after preparing/enabling the panel and right
- * before unpreparing/disabling the panel. It's primary intention is to power on
- * an associated touchscreen, though it could be used for any similar devices.
- * Multiple devices are allowed the follow the same panel.
+ * A panel follower is called right after preparing the panel and right before
+ * unpreparing the panel. It's primary intention is to power on an associated
+ * touchscreen, though it could be used for any similar devices. Multiple
+ * devices are allowed the follow the same panel.
  *
- * If a follower is added to a panel that's already been prepared/enabled, the
- * follower's prepared/enabled callback is called right away.
+ * If a follower is added to a panel that's already been turned on, the
+ * follower's prepare callback is called right away.
  *
  * The "panel" property of the follower points to the panel to be followed.
  *
@@ -607,17 +569,11 @@ int drm_panel_add_follower(struct device *follower_dev,
 	mutex_lock(&panel->follower_lock);
 
 	list_add_tail(&follower->list, &panel->followers);
-	if (panel->prepared && follower->funcs->panel_prepared) {
+	if (panel->prepared) {
 		ret = follower->funcs->panel_prepared(follower);
 		if (ret < 0)
 			dev_info(panel->dev, "%ps failed: %d\n",
 				 follower->funcs->panel_prepared, ret);
-	}
-	if (panel->enabled && follower->funcs->panel_enabled) {
-		ret = follower->funcs->panel_enabled(follower);
-		if (ret < 0)
-			dev_info(panel->dev, "%ps failed: %d\n",
-				 follower->funcs->panel_enabled, ret);
 	}
 
 	mutex_unlock(&panel->follower_lock);
@@ -631,8 +587,7 @@ EXPORT_SYMBOL(drm_panel_add_follower);
  * @follower:     The panel follower descriptor for the follower.
  *
  * Undo drm_panel_add_follower(). This includes calling the follower's
- * unpreparing/disabling function if we're removed from a panel that's currently
- * prepared/enabled.
+ * unprepare function if we're removed from a panel that's currently prepared.
  *
  * Return: 0 or an error code.
  */
@@ -643,13 +598,7 @@ void drm_panel_remove_follower(struct drm_panel_follower *follower)
 
 	mutex_lock(&panel->follower_lock);
 
-	if (panel->enabled && follower->funcs->panel_disabling) {
-		ret = follower->funcs->panel_disabling(follower);
-		if (ret < 0)
-			dev_info(panel->dev, "%ps failed: %d\n",
-				 follower->funcs->panel_disabling, ret);
-	}
-	if (panel->prepared && follower->funcs->panel_unpreparing) {
+	if (panel->prepared) {
 		ret = follower->funcs->panel_unpreparing(follower);
 		if (ret < 0)
 			dev_info(panel->dev, "%ps failed: %d\n",

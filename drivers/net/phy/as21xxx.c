@@ -884,12 +884,11 @@ static int as21xxx_match_phy_device(struct phy_device *phydev,
 	u32 phy_id;
 	int ret;
 
-	/* Skip PHY that are not AS21xxx */
-	if (!phy_id_compare_vendor(phydev->c45_ids.device_ids[MDIO_MMD_PCS],
-				   PHY_VENDOR_AEONSEMI))
+	/* Skip PHY that are not AS21xxx or already have firmware loaded */
+	if (phydev->c45_ids.device_ids[MDIO_MMD_PCS] != PHY_ID_AS21XXX)
 		return genphy_match_phy_device(phydev, phydrv);
 
-	/* Read PHY ID to handle firmware loaded or HW reset */
+	/* Read PHY ID to handle firmware just loaded */
 	ret = phy_read_mmd(phydev, MDIO_MMD_PCS, MII_PHYSID1);
 	if (ret < 0)
 		return ret;

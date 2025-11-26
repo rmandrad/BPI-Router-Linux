@@ -57,7 +57,6 @@ enum node_type {
 	NODE_TYPE_REGULAR,
 	NODE_TYPE_INODE,
 	NODE_TYPE_XATTR,
-	NODE_TYPE_NON_INODE,
 };
 
 /*

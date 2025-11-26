@@ -110,10 +110,9 @@ static int amdgpu_pm_dev_state_check(struct amdgpu_device *adev, bool runpm)
 	bool runpm_check = runpm ? adev->in_runpm : false;
 
 	if (amdgpu_in_reset(adev))
-		return -EBUSY;
-
+		return -EPERM;
 	if (adev->in_suspend && !runpm_check)
-		return -EBUSY;
+		return -EPERM;
 
 	return 0;
 }

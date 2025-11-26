@@ -576,12 +576,11 @@ void tcp_fastopen_active_disable_ofo_check(struct sock *sk)
 		}
 	} else if (tp->syn_fastopen_ch &&
 		   atomic_read(&sock_net(sk)->ipv4.tfo_active_disable_times)) {
-		rcu_read_lock();
-		dst = __sk_dst_get(sk);
-		dev = dst ? dst_dev_rcu(dst) : NULL;
+		dst = sk_dst_get(sk);
+		dev = dst ? dst_dev(dst) : NULL;
 		if (!(dev && (dev->flags & IFF_LOOPBACK)))
 			atomic_set(&sock_net(sk)->ipv4.tfo_active_disable_times, 0);
-		rcu_read_unlock();
+		dst_release(dst);
 	}
 }
 

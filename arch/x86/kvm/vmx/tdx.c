@@ -861,7 +861,6 @@ void tdx_vcpu_free(struct kvm_vcpu *vcpu)
 	if (tdx->vp.tdvpr_page) {
 		tdx_reclaim_control_page(tdx->vp.tdvpr_page);
 		tdx->vp.tdvpr_page = 0;
-		tdx->vp.tdvpr_pa = 0;
 	}
 
 	tdx->state = VCPU_TD_STATE_UNINITIALIZED;
@@ -2941,13 +2940,6 @@ static int tdx_td_vcpu_init(struct kvm_vcpu *vcpu, u64 vcpu_rcx)
 		return -ENOMEM;
 	tdx->vp.tdvpr_page = page;
 
-	/*
-	 * page_to_phys() does not work in 'noinstr' code, like guest
-	 * entry via tdh_vp_enter(). Precalculate and store it instead
-	 * of doing it at runtime later.
-	 */
-	tdx->vp.tdvpr_pa = page_to_phys(tdx->vp.tdvpr_page);
-
 	tdx->vp.tdcx_pages = kcalloc(kvm_tdx->td.tdcx_nr_pages, sizeof(*tdx->vp.tdcx_pages),
 			       	     GFP_KERNEL);
 	if (!tdx->vp.tdcx_pages) {
@@ -3010,7 +3002,6 @@ free_tdvpr:
 	if (tdx->vp.tdvpr_page)
 		__free_page(tdx->vp.tdvpr_page);
 	tdx->vp.tdvpr_page = 0;
-	tdx->vp.tdvpr_pa = 0;
 
 	return ret;
 }
@@ -3466,11 +3457,12 @@ static int __init __tdx_bringup(void)
 	if (r)
 		goto tdx_bringup_err;
 
-	r = -EINVAL;
 	/* Get TDX global information for later use */
 	tdx_sysinfo = tdx_get_sysinfo();
-	if (WARN_ON_ONCE(!tdx_sysinfo))
+	if (WARN_ON_ONCE(!tdx_sysinfo)) {
+		r = -EINVAL;
 		goto get_sysinfo_err;
+	}
 
 	/* Check TDX module and KVM capabilities */
 	if (!tdx_get_supported_attrs(&tdx_sysinfo->td_conf) ||
@@ -3513,11 +3505,14 @@ static int __init __tdx_bringup(void)
 	if (td_conf->max_vcpus_per_td < num_present_cpus()) {
 		pr_err("Disable TDX: MAX_VCPU_PER_TD (%u) smaller than number of logical CPUs (%u).\n",
 				td_conf->max_vcpus_per_td, num_present_cpus());
+		r = -EINVAL;
 		goto get_sysinfo_err;
 	}
 
-	if (misc_cg_set_capacity(MISC_CG_RES_TDX, tdx_get_nr_guest_keyids()))
+	if (misc_cg_set_capacity(MISC_CG_RES_TDX, tdx_get_nr_guest_keyids())) {
+		r = -EINVAL;
 		goto get_sysinfo_err;
+	}
 
 	/*
 	 * Leave hardware virtualization enabled after TDX is enabled

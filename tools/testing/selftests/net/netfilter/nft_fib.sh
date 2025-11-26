@@ -256,12 +256,12 @@ test_ping_unreachable() {
   local daddr4=$1
   local daddr6=$2
 
-  if ip netns exec "$ns1" ping -c 1 -W 0.1 -q "$daddr4" > /dev/null; then
+  if ip netns exec "$ns1" ping -c 1 -w 1 -q "$daddr4" > /dev/null; then
 	echo "FAIL: ${ns1} could reach $daddr4" 1>&2
 	return 1
   fi
 
-  if ip netns exec "$ns1" ping -c 1 -W 0.1 -q "$daddr6" > /dev/null; then
+  if ip netns exec "$ns1" ping -c 1 -w 1 -q "$daddr6" > /dev/null; then
 	echo "FAIL: ${ns1} could reach $daddr6" 1>&2
 	return 1
   fi
@@ -437,17 +437,14 @@ check_type()
 	local addr="$3"
 	local type="$4"
 	local count="$5"
-	local lret=0
 
 	[ -z "$count" ] && count=1
 
 	if ! ip netns exec "$nsrouter" nft get element inet t "$setname" { "$iifname" . "$addr" . "$type" } |grep -q "counter packets $count";then
-		echo "FAIL: did not find $iifname . $addr . $type in $setname with $count packets"
+		echo "FAIL: did not find $iifname . $addr . $type in $setname"
 		ip netns exec "$nsrouter" nft list set inet t "$setname"
 		ret=1
-		# do not fail right away, delete entry if it exists so later test that
-		# checks for unwanted keys don't get confused by this *expected* key.
-		lret=1
+		return 1
 	fi
 
 	# delete the entry, this allows to check if anything unexpected appeared
@@ -459,7 +456,7 @@ check_type()
 		return 1
 	fi
 
-	return $lret
+	return 0
 }
 
 check_local()

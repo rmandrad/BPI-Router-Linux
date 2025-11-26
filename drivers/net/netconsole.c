@@ -928,7 +928,6 @@ static ssize_t userdatum_value_store(struct config_item *item, const char *buf,
 	if (count > MAX_EXTRADATA_VALUE_LEN)
 		return -EMSGSIZE;
 
-	mutex_lock(&netconsole_subsys.su_mutex);
 	mutex_lock(&dynamic_netconsole_mutex);
 
 	ret = strscpy(udm->value, buf, sizeof(udm->value));
@@ -942,7 +941,6 @@ static ssize_t userdatum_value_store(struct config_item *item, const char *buf,
 	ret = count;
 out_unlock:
 	mutex_unlock(&dynamic_netconsole_mutex);
-	mutex_unlock(&netconsole_subsys.su_mutex);
 	return ret;
 }
 
@@ -968,7 +966,6 @@ static ssize_t sysdata_msgid_enabled_store(struct config_item *item,
 	if (ret)
 		return ret;
 
-	mutex_lock(&netconsole_subsys.su_mutex);
 	mutex_lock(&dynamic_netconsole_mutex);
 	curr = !!(nt->sysdata_fields & SYSDATA_MSGID);
 	if (msgid_enabled == curr)
@@ -989,7 +986,6 @@ unlock_ok:
 	ret = strnlen(buf, count);
 unlock:
 	mutex_unlock(&dynamic_netconsole_mutex);
-	mutex_unlock(&netconsole_subsys.su_mutex);
 	return ret;
 }
 
@@ -1004,7 +1000,6 @@ static ssize_t sysdata_release_enabled_store(struct config_item *item,
 	if (ret)
 		return ret;
 
-	mutex_lock(&netconsole_subsys.su_mutex);
 	mutex_lock(&dynamic_netconsole_mutex);
 	curr = !!(nt->sysdata_fields & SYSDATA_RELEASE);
 	if (release_enabled == curr)
@@ -1025,7 +1020,6 @@ unlock_ok:
 	ret = strnlen(buf, count);
 unlock:
 	mutex_unlock(&dynamic_netconsole_mutex);
-	mutex_unlock(&netconsole_subsys.su_mutex);
 	return ret;
 }
 
@@ -1040,7 +1034,6 @@ static ssize_t sysdata_taskname_enabled_store(struct config_item *item,
 	if (ret)
 		return ret;
 
-	mutex_lock(&netconsole_subsys.su_mutex);
 	mutex_lock(&dynamic_netconsole_mutex);
 	curr = !!(nt->sysdata_fields & SYSDATA_TASKNAME);
 	if (taskname_enabled == curr)
@@ -1061,7 +1054,6 @@ unlock_ok:
 	ret = strnlen(buf, count);
 unlock:
 	mutex_unlock(&dynamic_netconsole_mutex);
-	mutex_unlock(&netconsole_subsys.su_mutex);
 	return ret;
 }
 
@@ -1077,7 +1069,6 @@ static ssize_t sysdata_cpu_nr_enabled_store(struct config_item *item,
 	if (ret)
 		return ret;
 
-	mutex_lock(&netconsole_subsys.su_mutex);
 	mutex_lock(&dynamic_netconsole_mutex);
 	curr = !!(nt->sysdata_fields & SYSDATA_CPU_NR);
 	if (cpu_nr_enabled == curr)
@@ -1106,7 +1097,6 @@ unlock_ok:
 	ret = strnlen(buf, count);
 unlock:
 	mutex_unlock(&dynamic_netconsole_mutex);
-	mutex_unlock(&netconsole_subsys.su_mutex);
 	return ret;
 }
 

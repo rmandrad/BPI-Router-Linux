@@ -423,11 +423,13 @@ static int ethnl_set_tsconfig(struct ethnl_req_info *req_base,
 			return ret;
 	}
 
-	ret = tsconfig_send_reply(dev, info);
-	if (ret && ret != -EOPNOTSUPP) {
-		NL_SET_ERR_MSG(info->extack,
-			       "error while reading the new configuration set");
-		return ret;
+	if (hwprov_mod || config_mod) {
+		ret = tsconfig_send_reply(dev, info);
+		if (ret && ret != -EOPNOTSUPP) {
+			NL_SET_ERR_MSG(info->extack,
+				       "error while reading the new configuration set");
+			return ret;
+		}
 	}
 
 	/* tsconfig has no notification */

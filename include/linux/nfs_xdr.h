@@ -1659,7 +1659,6 @@ struct nfs_pgio_header {
 	void			*netfs;
 #endif
 
-	unsigned short		retrans;
 	int			pnfs_error;
 	int			error;		/* merge with pnfs_error */
 	unsigned int		good_bytes;	/* boundary of good data */

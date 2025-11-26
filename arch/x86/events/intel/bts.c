@@ -643,4 +643,4 @@ static __init int bts_init(void)
 
 	return perf_pmu_register(&bts_pmu, "intel_bts", -1);
 }
-early_initcall(bts_init);
+arch_initcall(bts_init);

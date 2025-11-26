@@ -169,18 +169,11 @@ struct kmac_sha2_ctx {
 	u64 buflen[2];
 };
 
-enum async_op {
-	OP_NOP = 0,
-	OP_UPDATE,
-	OP_FINAL,
-	OP_FINUP,
-};
-
 /* phmac request context */
 struct phmac_req_ctx {
 	struct hash_walk_helper hwh;
 	struct kmac_sha2_ctx kmac_ctx;
-	enum async_op async_op;
+	bool final;
 };
 
 /*
@@ -617,7 +610,6 @@ static int phmac_update(struct ahash_request *req)
 	 * using engine to serialize requests.
 	 */
 	if (rc == 0 || rc == -EKEYEXPIRED) {
-		req_ctx->async_op = OP_UPDATE;
 		atomic_inc(&tfm_ctx->via_engine_ctr);
 		rc = crypto_transfer_hash_request_to_engine(phmac_crypto_engine, req);
 		if (rc != -EINPROGRESS)
@@ -655,7 +647,8 @@ static int phmac_final(struct ahash_request *req)
 	 * using engine to serialize requests.
 	 */
 	if (rc == 0 || rc == -EKEYEXPIRED) {
-		req_ctx->async_op = OP_FINAL;
+		req->nbytes = 0;
+		req_ctx->final = true;
 		atomic_inc(&tfm_ctx->via_engine_ctr);
 		rc = crypto_transfer_hash_request_to_engine(phmac_crypto_engine, req);
 		if (rc != -EINPROGRESS)
@@ -683,16 +676,13 @@ static int phmac_finup(struct ahash_request *req)
 	if (rc)
 		goto out;
 
-	req_ctx->async_op = OP_FINUP;
-
 	/* Try synchronous operations if no active engine usage */
 	if (!atomic_read(&tfm_ctx->via_engine_ctr)) {
 		rc = phmac_kmac_update(req, false);
 		if (rc == 0)
-			req_ctx->async_op = OP_FINAL;
+			req->nbytes = 0;
 	}
-	if (!rc && req_ctx->async_op == OP_FINAL &&
-	    !atomic_read(&tfm_ctx->via_engine_ctr)) {
+	if (!rc && !req->nbytes && !atomic_read(&tfm_ctx->via_engine_ctr)) {
 		rc = phmac_kmac_final(req, false);
 		if (rc == 0)
 			goto out;
@@ -704,7 +694,7 @@ static int phmac_finup(struct ahash_request *req)
 	 * using engine to serialize requests.
 	 */
 	if (rc == 0 || rc == -EKEYEXPIRED) {
-		/* req->async_op has been set to either OP_FINUP or OP_FINAL */
+		req_ctx->final = true;
 		atomic_inc(&tfm_ctx->via_engine_ctr);
 		rc = crypto_transfer_hash_request_to_engine(phmac_crypto_engine, req);
 		if (rc != -EINPROGRESS)
@@ -865,16 +855,15 @@ static int phmac_do_one_request(struct crypto_engine *engine, void *areq)
 
 	/*
 	 * Three kinds of requests come in here:
-	 * 1. req->async_op == OP_UPDATE with req->nbytes > 0
-	 * 2. req->async_op == OP_FINUP with req->nbytes > 0
-	 * 3. req->async_op == OP_FINAL
-	 * For update and finup the hwh walk has already been prepared
-	 * by the caller. For final there is no hwh walk needed.
+	 * update when req->nbytes > 0 and req_ctx->final is false
+	 * final when req->nbytes = 0 and req_ctx->final is true
+	 * finup when req->nbytes > 0 and req_ctx->final is true
+	 * For update and finup the hwh walk needs to be prepared and
+	 * up to date but the actual nr of bytes in req->nbytes may be
+	 * any non zero number. For final there is no hwh walk needed.
 	 */
 
-	switch (req_ctx->async_op) {
-	case OP_UPDATE:
-	case OP_FINUP:
+	if (req->nbytes) {
 		rc = phmac_kmac_update(req, true);
 		if (rc == -EKEYEXPIRED) {
 			/*
@@ -891,11 +880,10 @@ static int phmac_do_one_request(struct crypto_engine *engine, void *areq)
 			hwh_advance(hwh, rc);
 			goto out;
 		}
-		if (req_ctx->async_op == OP_UPDATE)
-			break;
-		req_ctx->async_op = OP_FINAL;
-		fallthrough;
-	case OP_FINAL:
+		req->nbytes = 0;
+	}
+
+	if (req_ctx->final) {
 		rc = phmac_kmac_final(req, true);
 		if (rc == -EKEYEXPIRED) {
 			/*
@@ -909,14 +897,10 @@ static int phmac_do_one_request(struct crypto_engine *engine, void *areq)
 			cond_resched();
 			return -ENOSPC;
 		}
-		break;
-	default:
-		/* unknown/unsupported/unimplemented asynch op */
-		return -EOPNOTSUPP;
 	}
 
 out:
-	if (rc || req_ctx->async_op == OP_FINAL)
+	if (rc || req_ctx->final)
 		memzero_explicit(kmac_ctx, sizeof(*kmac_ctx));
 	pr_debug("request complete with rc=%d\n", rc);
 	local_bh_disable();

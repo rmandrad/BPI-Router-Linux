@@ -16,22 +16,6 @@
 
 #ifdef CONFIG_FRAME_POINTER
 
-/*
- * This disables KASAN checking when reading a value from another task's stack,
- * since the other task could be running on another CPU and could have poisoned
- * the stack in the meantime.
- */
-#define READ_ONCE_TASK_STACK(task, x)			\
-({							\
-	unsigned long val;				\
-	unsigned long addr = x;				\
-	if ((task) == current)				\
-		val = READ_ONCE(addr);			\
-	else						\
-		val = READ_ONCE_NOCHECK(addr);		\
-	val;						\
-})
-
 extern asmlinkage void handle_exception(void);
 extern unsigned long ret_from_exception_end;
 
@@ -85,9 +69,8 @@ void notrace walk_stackframe(struct task_struct *task, struct pt_regs *regs,
 			fp = frame->ra;
 			pc = regs->ra;
 		} else {
-			fp = READ_ONCE_TASK_STACK(task, frame->fp);
-			pc = READ_ONCE_TASK_STACK(task, frame->ra);
-			pc = ftrace_graph_ret_addr(current, &graph_idx, pc,
+			fp = frame->fp;
+			pc = ftrace_graph_ret_addr(current, &graph_idx, frame->ra,
 						   &frame->ra);
 			if (pc >= (unsigned long)handle_exception &&
 			    pc < (unsigned long)&ret_from_exception_end) {

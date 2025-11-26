@@ -342,12 +342,12 @@ static int rseq_need_restart(struct task_struct *t, u32 cs_flags)
 
 	/*
 	 * Load and clear event mask atomically with respect to
-	 * scheduler preemption and membarrier IPIs.
+	 * scheduler preemption.
 	 */
-	scoped_guard(RSEQ_EVENT_GUARD) {
-		event_mask = t->rseq_event_mask;
-		t->rseq_event_mask = 0;
-	}
+	preempt_disable();
+	event_mask = t->rseq_event_mask;
+	t->rseq_event_mask = 0;
+	preempt_enable();
 
 	return !!event_mask;
 }

@@ -482,17 +482,6 @@ nouveau_sched_create(struct nouveau_sched **psched, struct nouveau_drm *drm,
 	return 0;
 }
 
-static bool
-nouveau_sched_job_list_empty(struct nouveau_sched *sched)
-{
-	bool empty;
-
-	spin_lock(&sched->job.list.lock);
-	empty = list_empty(&sched->job.list.head);
-	spin_unlock(&sched->job.list.lock);
-
-	return empty;
-}
 
 static void
 nouveau_sched_fini(struct nouveau_sched *sched)
@@ -500,7 +489,8 @@ nouveau_sched_fini(struct nouveau_sched *sched)
 	struct drm_gpu_scheduler *drm_sched = &sched->base;
 	struct drm_sched_entity *entity = &sched->entity;
 
-	wait_event(sched->job.wq, nouveau_sched_job_list_empty(sched));
+	rmb(); /* for list_empty to work without lock */
+	wait_event(sched->job.wq, list_empty(&sched->job.list.head));
 
 	drm_sched_entity_fini(entity);
 	drm_sched_fini(drm_sched);

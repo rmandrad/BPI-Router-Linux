@@ -96,4 +96,3 @@
 };
 
 #include "k3-j742s2-main.dtsi"
-#include "k3-j742s2-mcu-wakeup.dtsi"

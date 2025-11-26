@@ -499,9 +499,7 @@ int mt76x2_eeprom_init(struct mt76x02_dev *dev)
 
 	mt76x02_eeprom_parse_hw_cap(dev);
 	mt76x2_eeprom_get_macaddr(dev);
-	ret = mt76_eeprom_override(&dev->mphy);
-	if (ret)
-		return ret;
+	mt76_eeprom_override(&dev->mphy);
 	dev->mphy.macaddr[0] &= ~BIT(1);
 
 	return 0;

@@ -31,18 +31,9 @@ struct ext_ack {
 	const char *str;
 };
 
-enum get_ea_ret {
-	ERROR = -1,
-	NO_CTRL = 0,
-	FOUND_DONE,
-	FOUND_ERR,
-	FOUND_EXTACK,
-};
-
-static enum get_ea_ret
-nl_get_extack(char *buf, size_t n, struct ext_ack *ea)
+/* 0: no done, 1: done found, 2: extack found, -1: error */
+static int nl_get_extack(char *buf, size_t n, struct ext_ack *ea)
 {
-	enum get_ea_ret ret = NO_CTRL;
 	const struct nlmsghdr *nlh;
 	const struct nlattr *attr;
 	ssize_t rem;
@@ -50,19 +41,15 @@ nl_get_extack(char *buf, size_t n, struct ext_ack *ea)
 	for (rem = n; rem > 0; NLMSG_NEXT(nlh, rem)) {
 		nlh = (struct nlmsghdr *)&buf[n - rem];
 		if (!NLMSG_OK(nlh, rem))
-			return ERROR;
+			return -1;
 
-		if (nlh->nlmsg_type == NLMSG_ERROR)
-			ret = FOUND_ERR;
-		else if (nlh->nlmsg_type == NLMSG_DONE)
-			ret = FOUND_DONE;
-		else
+		if (nlh->nlmsg_type != NLMSG_DONE)
 			continue;
 
 		ea->err = -*(int *)NLMSG_DATA(nlh);
 
 		if (!(nlh->nlmsg_flags & NLM_F_ACK_TLVS))
-			return ret;
+			return 1;
 
 		ynl_attr_for_each(attr, nlh, sizeof(int)) {
 			switch (ynl_attr_type(attr)) {
@@ -81,10 +68,10 @@ nl_get_extack(char *buf, size_t n, struct ext_ack *ea)
 			}
 		}
 
-		return FOUND_EXTACK;
+		return 2;
 	}
 
-	return ret;
+	return 0;
 }
 
 static const struct {
@@ -112,9 +99,9 @@ static const struct {
 TEST(dump_extack)
 {
 	int netlink_sock;
-	int i, cnt, ret;
 	char buf[8192];
 	int one = 1;
+	int i, cnt;
 	ssize_t n;
 
 	netlink_sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
@@ -131,7 +118,7 @@ TEST(dump_extack)
 	ASSERT_EQ(n, 0);
 
 	/* Dump so many times we fill up the buffer */
-	cnt = 80;
+	cnt = 64;
 	for (i = 0; i < cnt; i++) {
 		n = send(netlink_sock, &dump_neigh_bad,
 			 sizeof(dump_neigh_bad), 0);
@@ -153,20 +140,10 @@ TEST(dump_extack)
 		}
 		ASSERT_GE(n, (ssize_t)sizeof(struct nlmsghdr));
 
-		ret = nl_get_extack(buf, n, &ea);
-		/* Once we fill the buffer we'll see one ENOBUFS followed
-		 * by a number of EBUSYs. Then the last recv() will finally
-		 * trigger and complete the dump.
-		 */
-		if (ret == FOUND_ERR && (ea.err == ENOBUFS || ea.err == EBUSY))
-			continue;
-		EXPECT_EQ(ret, FOUND_EXTACK);
-		EXPECT_EQ(ea.err, EINVAL);
+		EXPECT_EQ(nl_get_extack(buf, n, &ea), 2);
 		EXPECT_EQ(ea.attr_offs,
 			  sizeof(struct nlmsghdr) + sizeof(struct ndmsg));
 	}
-	/* Make sure last message was a full DONE+extack */
-	EXPECT_EQ(ret, FOUND_EXTACK);
 }
 
 static const struct {

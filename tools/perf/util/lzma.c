@@ -120,7 +120,7 @@ bool lzma_is_compressed(const char *input)
 	ssize_t rc;
 
 	if (fd < 0)
-		return false;
+		return -1;
 
 	rc = read(fd, buf, sizeof(buf));
 	close(fd);

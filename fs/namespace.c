@@ -65,15 +65,6 @@ static int __init set_mphash_entries(char *str)
 }
 __setup("mphash_entries=", set_mphash_entries);
 
-static char * __initdata initramfs_options;
-static int __init initramfs_options_setup(char *str)
-{
-	initramfs_options = str;
-	return 1;
-}
-
-__setup("initramfs_options=", initramfs_options_setup);
-
 static u64 event;
 static DEFINE_XARRAY_FLAGS(mnt_id_xa, XA_FLAGS_ALLOC);
 static DEFINE_IDA(mnt_group_ida);
@@ -180,14 +171,13 @@ static void mnt_ns_tree_add(struct mnt_namespace *ns)
 static void mnt_ns_release(struct mnt_namespace *ns)
 {
 	/* keep alive for {list,stat}mount() */
-	if (ns && refcount_dec_and_test(&ns->passive)) {
+	if (refcount_dec_and_test(&ns->passive)) {
 		fsnotify_mntns_delete(ns);
 		put_user_ns(ns->user_ns);
 		kfree(ns);
 	}
 }
-DEFINE_FREE(mnt_ns_release, struct mnt_namespace *,
-	    if (!IS_ERR(_T)) mnt_ns_release(_T))
+DEFINE_FREE(mnt_ns_release, struct mnt_namespace *, if (_T) mnt_ns_release(_T))
 
 static void mnt_ns_release_rcu(struct rcu_head *rcu)
 {
@@ -197,7 +187,7 @@ static void mnt_ns_release_rcu(struct rcu_head *rcu)
 static void mnt_ns_tree_remove(struct mnt_namespace *ns)
 {
 	/* remove from global mount namespace list */
-	if (!RB_EMPTY_NODE(&ns->mnt_ns_tree_node)) {
+	if (!is_anon_ns(ns)) {
 		mnt_ns_tree_write_lock();
 		rb_erase(&ns->mnt_ns_tree_node, &mnt_ns_tree);
 		list_bidir_del_rcu(&ns->mnt_ns_list);
@@ -2786,19 +2776,12 @@ static int do_lock_mount(struct path *path, struct pinned_mountpoint *pinned, bo
 	struct path under = {};
 	int err = -ENOENT;
 
-	if (unlikely(beneath) && !path_mounted(path))
-		return -EINVAL;
-
 	for (;;) {
 		struct mount *m = real_mount(mnt);
 
 		if (beneath) {
 			path_put(&under);
 			read_seqlock_excl(&mount_lock);
-			if (unlikely(!mnt_has_parent(m))) {
-				read_sequnlock_excl(&mount_lock);
-				return -EINVAL;
-			}
 			under.mnt = mntget(&m->mnt_parent->mnt);
 			under.dentry = dget(m->mnt_mountpoint);
 			read_sequnlock_excl(&mount_lock);
@@ -3470,6 +3453,8 @@ static bool mount_is_ancestor(const struct mount *p1, const struct mount *p2)
  * @to:   mount under which to mount
  * @mp:   mountpoint of @to
  *
+ * - Make sure that @to->dentry is actually the root of a mount under
+ *   which we can mount another mount.
  * - Make sure that nothing can be mounted beneath the caller's current
  *   root or the rootfs of the namespace.
  * - Make sure that the caller can unmount the topmost mount ensuring
@@ -3490,6 +3475,12 @@ static int can_move_mount_beneath(const struct path *from,
 	struct mount *mnt_from = real_mount(from->mnt),
 		     *mnt_to = real_mount(to->mnt),
 		     *parent_mnt_to = mnt_to->mnt_parent;
+
+	if (!mnt_has_parent(mnt_to))
+		return -EINVAL;
+
+	if (!path_mounted(to))
+		return -EINVAL;
 
 	if (IS_MNT_LOCKED(mnt_to))
 		return -EINVAL;
@@ -5720,6 +5711,7 @@ static int grab_requested_root(struct mnt_namespace *ns, struct path *root)
 static int do_statmount(struct kstatmount *s, u64 mnt_id, u64 mnt_ns_id,
 			struct mnt_namespace *ns)
 {
+	struct path root __free(path_put) = {};
 	struct mount *m;
 	int err;
 
@@ -5731,7 +5723,7 @@ static int do_statmount(struct kstatmount *s, u64 mnt_id, u64 mnt_ns_id,
 	if (!s->mnt)
 		return -ENOENT;
 
-	err = grab_requested_root(ns, &s->root);
+	err = grab_requested_root(ns, &root);
 	if (err)
 		return err;
 
@@ -5740,13 +5732,15 @@ static int do_statmount(struct kstatmount *s, u64 mnt_id, u64 mnt_ns_id,
 	 * mounts to show users.
 	 */
 	m = real_mount(s->mnt);
-	if (!is_path_reachable(m, m->mnt.mnt_root, &s->root) &&
+	if (!is_path_reachable(m, m->mnt.mnt_root, &root) &&
 	    !ns_capable_noaudit(ns->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
 	err = security_sb_statfs(s->mnt->mnt_root);
 	if (err)
 		return err;
+
+	s->root = root;
 
 	/*
 	 * Note that mount properties in mnt->mnt_flags, mnt->mnt_idmap
@@ -5882,7 +5876,7 @@ static int copy_mnt_id_req(const struct mnt_id_req __user *req,
 	ret = copy_struct_from_user(kreq, sizeof(*kreq), req, usize);
 	if (ret)
 		return ret;
-	if (kreq->mnt_ns_fd != 0 && kreq->mnt_ns_id)
+	if (kreq->spare != 0)
 		return -EINVAL;
 	/* The first valid unique mount id is MNT_UNIQUE_ID_OFFSET + 1. */
 	if (kreq->mnt_id <= MNT_UNIQUE_ID_OFFSET)
@@ -5899,12 +5893,16 @@ static struct mnt_namespace *grab_requested_mnt_ns(const struct mnt_id_req *kreq
 {
 	struct mnt_namespace *mnt_ns;
 
-	if (kreq->mnt_ns_id) {
-		mnt_ns = lookup_mnt_ns(kreq->mnt_ns_id);
-	} else if (kreq->mnt_ns_fd) {
+	if (kreq->mnt_ns_id && kreq->spare)
+		return ERR_PTR(-EINVAL);
+
+	if (kreq->mnt_ns_id)
+		return lookup_mnt_ns(kreq->mnt_ns_id);
+
+	if (kreq->spare) {
 		struct ns_common *ns;
 
-		CLASS(fd, f)(kreq->mnt_ns_fd);
+		CLASS(fd, f)(kreq->spare);
 		if (fd_empty(f))
 			return ERR_PTR(-EBADF);
 
@@ -5919,8 +5917,6 @@ static struct mnt_namespace *grab_requested_mnt_ns(const struct mnt_id_req *kreq
 	} else {
 		mnt_ns = current->nsproxy->mnt_ns;
 	}
-	if (!mnt_ns)
-		return ERR_PTR(-ENOENT);
 
 	refcount_inc(&mnt_ns->passive);
 	return mnt_ns;
@@ -5945,8 +5941,8 @@ SYSCALL_DEFINE4(statmount, const struct mnt_id_req __user *, req,
 		return ret;
 
 	ns = grab_requested_mnt_ns(&kreq);
-	if (IS_ERR(ns))
-		return PTR_ERR(ns);
+	if (!ns)
+		return -ENOENT;
 
 	if (kreq.mnt_ns_id && (ns != current->nsproxy->mnt_ns) &&
 	    !ns_capable_noaudit(ns->user_ns, CAP_SYS_ADMIN))
@@ -5967,40 +5963,28 @@ retry:
 	if (!ret)
 		ret = copy_statmount_to_user(ks);
 	kvfree(ks->seq.buf);
-	path_put(&ks->root);
 	if (retry_statmount(ret, &seq_size))
 		goto retry;
 	return ret;
 }
 
-struct klistmount {
-	u64 last_mnt_id;
-	u64 mnt_parent_id;
-	u64 *kmnt_ids;
-	u32 nr_mnt_ids;
-	struct mnt_namespace *ns;
-	struct path root;
-};
-
-static ssize_t do_listmount(struct klistmount *kls, bool reverse)
+static ssize_t do_listmount(struct mnt_namespace *ns, u64 mnt_parent_id,
+			    u64 last_mnt_id, u64 *mnt_ids, size_t nr_mnt_ids,
+			    bool reverse)
 {
-	struct mnt_namespace *ns = kls->ns;
-	u64 mnt_parent_id = kls->mnt_parent_id;
-	u64 last_mnt_id = kls->last_mnt_id;
-	u64 *mnt_ids = kls->kmnt_ids;
-	size_t nr_mnt_ids = kls->nr_mnt_ids;
+	struct path root __free(path_put) = {};
 	struct path orig;
 	struct mount *r, *first;
 	ssize_t ret;
 
 	rwsem_assert_held(&namespace_sem);
 
-	ret = grab_requested_root(ns, &kls->root);
+	ret = grab_requested_root(ns, &root);
 	if (ret)
 		return ret;
 
 	if (mnt_parent_id == LSMT_ROOT) {
-		orig = kls->root;
+		orig = root;
 	} else {
 		orig.mnt = lookup_mnt_in_ns(mnt_parent_id, ns);
 		if (!orig.mnt)
@@ -6012,7 +5996,7 @@ static ssize_t do_listmount(struct klistmount *kls, bool reverse)
 	 * Don't trigger audit denials. We just want to determine what
 	 * mounts to show users.
 	 */
-	if (!is_path_reachable(real_mount(orig.mnt), orig.dentry, &kls->root) &&
+	if (!is_path_reachable(real_mount(orig.mnt), orig.dentry, &root) &&
 	    !ns_capable_noaudit(ns->user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -6045,46 +6029,14 @@ static ssize_t do_listmount(struct klistmount *kls, bool reverse)
 	return ret;
 }
 
-static void __free_klistmount_free(const struct klistmount *kls)
-{
-	path_put(&kls->root);
-	kvfree(kls->kmnt_ids);
-	mnt_ns_release(kls->ns);
-}
-
-static inline int prepare_klistmount(struct klistmount *kls, struct mnt_id_req *kreq,
-				     size_t nr_mnt_ids)
-{
-	u64 last_mnt_id = kreq->param;
-	struct mnt_namespace *ns;
-
-	/* The first valid unique mount id is MNT_UNIQUE_ID_OFFSET + 1. */
-	if (last_mnt_id != 0 && last_mnt_id <= MNT_UNIQUE_ID_OFFSET)
-		return -EINVAL;
-
-	kls->last_mnt_id = last_mnt_id;
-
-	kls->nr_mnt_ids = nr_mnt_ids;
-	kls->kmnt_ids = kvmalloc_array(nr_mnt_ids, sizeof(*kls->kmnt_ids),
-				       GFP_KERNEL_ACCOUNT);
-	if (!kls->kmnt_ids)
-		return -ENOMEM;
-
-	ns = grab_requested_mnt_ns(kreq);
-	if (IS_ERR(ns))
-		return PTR_ERR(ns);
-	kls->ns = ns;
-
-	kls->mnt_parent_id = kreq->mnt_id;
-	return 0;
-}
-
 SYSCALL_DEFINE4(listmount, const struct mnt_id_req __user *, req,
 		u64 __user *, mnt_ids, size_t, nr_mnt_ids, unsigned int, flags)
 {
-	struct klistmount kls __free(klistmount_free) = {};
+	u64 *kmnt_ids __free(kvfree) = NULL;
 	const size_t maxcount = 1000000;
+	struct mnt_namespace *ns __free(mnt_ns_release) = NULL;
 	struct mnt_id_req kreq;
+	u64 last_mnt_id;
 	ssize_t ret;
 
 	if (flags & ~LISTMOUNT_REVERSE)
@@ -6105,12 +6057,22 @@ SYSCALL_DEFINE4(listmount, const struct mnt_id_req __user *, req,
 	if (ret)
 		return ret;
 
-	ret = prepare_klistmount(&kls, &kreq, nr_mnt_ids);
-	if (ret)
-		return ret;
+	last_mnt_id = kreq.param;
+	/* The first valid unique mount id is MNT_UNIQUE_ID_OFFSET + 1. */
+	if (last_mnt_id != 0 && last_mnt_id <= MNT_UNIQUE_ID_OFFSET)
+		return -EINVAL;
 
-	if (kreq.mnt_ns_id && (kls.ns != current->nsproxy->mnt_ns) &&
-	    !ns_capable_noaudit(kls.ns->user_ns, CAP_SYS_ADMIN))
+	kmnt_ids = kvmalloc_array(nr_mnt_ids, sizeof(*kmnt_ids),
+				  GFP_KERNEL_ACCOUNT);
+	if (!kmnt_ids)
+		return -ENOMEM;
+
+	ns = grab_requested_mnt_ns(&kreq);
+	if (!ns)
+		return -ENOENT;
+
+	if (kreq.mnt_ns_id && (ns != current->nsproxy->mnt_ns) &&
+	    !ns_capable_noaudit(ns->user_ns, CAP_SYS_ADMIN))
 		return -ENOENT;
 
 	/*
@@ -6118,11 +6080,12 @@ SYSCALL_DEFINE4(listmount, const struct mnt_id_req __user *, req,
 	 * listmount() doesn't care about any mount properties.
 	 */
 	scoped_guard(rwsem_read, &namespace_sem)
-		ret = do_listmount(&kls, (flags & LISTMOUNT_REVERSE));
+		ret = do_listmount(ns, kreq.mnt_id, last_mnt_id, kmnt_ids,
+				   nr_mnt_ids, (flags & LISTMOUNT_REVERSE));
 	if (ret <= 0)
 		return ret;
 
-	if (copy_to_user(mnt_ids, kls.kmnt_ids, ret * sizeof(*mnt_ids)))
+	if (copy_to_user(mnt_ids, kmnt_ids, ret * sizeof(*mnt_ids)))
 		return -EFAULT;
 
 	return ret;
@@ -6135,7 +6098,7 @@ static void __init init_mount_tree(void)
 	struct mnt_namespace *ns;
 	struct path root;
 
-	mnt = vfs_kern_mount(&rootfs_fs_type, 0, "rootfs", initramfs_options);
+	mnt = vfs_kern_mount(&rootfs_fs_type, 0, "rootfs", NULL);
 	if (IS_ERR(mnt))
 		panic("Can't create rootfs");
 

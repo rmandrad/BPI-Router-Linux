@@ -10,6 +10,28 @@ PAUSE_ON_FAIL=no
 
 ################################################################################
 #
+log_test()
+{
+	local rc=$1
+	local expected=$2
+	local msg="$3"
+
+	if [ ${rc} -eq ${expected} ]; then
+		printf "TEST: %-60s  [ OK ]\n" "${msg}"
+		nsuccess=$((nsuccess+1))
+	else
+		ret=1
+		nfail=$((nfail+1))
+		printf "TEST: %-60s  [FAIL]\n" "${msg}"
+		if [ "${PAUSE_ON_FAIL}" = "yes" ]; then
+			echo
+			echo "hit enter to continue, 'q' to quit"
+			read a
+			[ "$a" = "q" ] && exit 1
+		fi
+	fi
+}
+
 run_cmd()
 {
 	local ns
@@ -181,14 +203,16 @@ setup_traceroute6()
 
 run_traceroute6()
 {
-	setup_traceroute6
+	if [ ! -x "$(command -v traceroute6)" ]; then
+		echo "SKIP: Could not run IPV6 test without traceroute6"
+		return
+	fi
 
-	RET=0
+	setup_traceroute6
 
 	# traceroute6 host-2 from host-1 (expects 2000:102::2)
 	run_cmd $h1 "traceroute6 2000:103::4 | grep -q 2000:102::2"
-	check_err $? "traceroute6 did not return 2000:102::2"
-	log_test "IPv6 traceroute"
+	log_test $? 0 "IPV6 traceroute"
 
 	cleanup_traceroute6
 }
@@ -244,14 +268,16 @@ setup_traceroute()
 
 run_traceroute()
 {
-	setup_traceroute
+	if [ ! -x "$(command -v traceroute)" ]; then
+		echo "SKIP: Could not run IPV4 test without traceroute"
+		return
+	fi
 
-	RET=0
+	setup_traceroute
 
 	# traceroute host-2 from host-1 (expects 1.0.1.1). Takes a while.
 	run_cmd $h1 "traceroute 1.0.2.4 | grep -q 1.0.1.1"
-	check_err $? "traceroute did not return 1.0.1.1"
-	log_test "IPv4 traceroute"
+	log_test $? 0 "IPV4 traceroute"
 
 	cleanup_traceroute
 }
@@ -268,6 +294,9 @@ run_tests()
 ################################################################################
 # main
 
+declare -i nfail=0
+declare -i nsuccess=0
+
 while getopts :pv o
 do
 	case $o in
@@ -277,9 +306,7 @@ do
 	esac
 done
 
-require_command traceroute6
-require_command traceroute
-
 run_tests
 
-exit "${EXIT_STATUS}"
+printf "\nTests passed: %3d\n" ${nsuccess}
+printf "Tests failed: %3d\n"   ${nfail}
