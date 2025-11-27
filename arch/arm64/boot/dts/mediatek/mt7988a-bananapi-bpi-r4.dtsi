@@ -120,6 +120,10 @@
 	proc-supply = <&rt5190_buck3>;
 };
 
+&mcusys {
+	proc-supply = <&rt5190_buck3>;
+};
+
 &cpu_thermal {
 	trips {
 		cpu_trip_hot: hot {
