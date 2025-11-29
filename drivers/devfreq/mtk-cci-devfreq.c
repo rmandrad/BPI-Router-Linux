@@ -28,8 +28,6 @@ struct mtk_ccifreq_drv {
 	struct clk *cci_clk;
 	struct clk *inter_clk;
 	int inter_voltage;
-	int cached_proc_volt;
-	int cached_sram_volt;
 	unsigned long pre_freq;
 	/* Avoid race condition for regulators between notify and policy */
 	struct mutex reg_lock;
@@ -47,49 +45,31 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 
 	if (!drv->sram_reg) {
 		ret = regulator_set_voltage(drv->proc_reg, new_voltage,
-				      drv->soc_data->proc_max_volt);
-		if (!ret)
-			drv->cached_proc_volt = new_voltage;
+					    drv->soc_data->proc_max_volt);
 		return ret;
 	}
 
 	pre_voltage = regulator_get_voltage(drv->proc_reg);
 	if (pre_voltage < 0) {
-		if (drv->cached_proc_volt > 0) {
-			dev_warn(dev, "use cached vproc value: %d\n",
-				 drv->cached_proc_volt);
-			pre_voltage = drv->cached_proc_volt;
-		} else {
-			dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
-			return pre_voltage;
-		}
-	} else {
-		drv->cached_proc_volt = pre_voltage;
+		dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
+		return pre_voltage;
 	}
 
 	pre_vsram = regulator_get_voltage(drv->sram_reg);
 	if (pre_vsram < 0) {
-		if (drv->cached_sram_volt > 0) {
-			dev_warn(dev, "use cached vsram value: %d\n",
-				 drv->cached_sram_volt);
-			pre_vsram = drv->cached_sram_volt;
-		} else {
-			dev_err(dev, "invalid vsram value: %d\n", pre_vsram);
-			return pre_vsram;
-		}
-	} else {
-		drv->cached_sram_volt = pre_vsram;
+		dev_err(dev, "invalid vsram value: %d\n", pre_vsram);
+		return pre_vsram;
 	}
 
 	new_vsram = clamp(new_voltage + soc_data->min_volt_shift,
-		       soc_data->sram_min_volt, soc_data->sram_max_volt);
+			  soc_data->sram_min_volt, soc_data->sram_max_volt);
 
 	do {
 		if (pre_voltage <= new_voltage) {
 			vsram = clamp(pre_voltage + soc_data->max_volt_shift,
-				       soc_data->sram_min_volt, new_vsram);
+				      soc_data->sram_min_volt, new_vsram);
 			ret = regulator_set_voltage(drv->sram_reg, vsram,
-				      soc_data->sram_max_volt);
+						    soc_data->sram_max_volt);
 			if (ret)
 				return ret;
 
@@ -100,17 +80,17 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 				voltage = vsram - soc_data->min_volt_shift;
 
 			ret = regulator_set_voltage(drv->proc_reg, voltage,
-				      soc_data->proc_max_volt);
+						    soc_data->proc_max_volt);
 			if (ret) {
 				regulator_set_voltage(drv->sram_reg, pre_vsram,
-					      soc_data->sram_max_volt);
+						      soc_data->sram_max_volt);
 				return ret;
 			}
 		} else if (pre_voltage > new_voltage) {
 			voltage = max(new_voltage,
 				      pre_vsram - soc_data->max_volt_shift);
 			ret = regulator_set_voltage(drv->proc_reg, voltage,
-				      soc_data->proc_max_volt);
+						    soc_data->proc_max_volt);
 			if (ret)
 				return ret;
 
@@ -118,13 +98,13 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 				vsram = new_vsram;
 			else
 				vsram = max(new_vsram,
-				       voltage + soc_data->min_volt_shift);
+					    voltage + soc_data->min_volt_shift);
 
 			ret = regulator_set_voltage(drv->sram_reg, vsram,
-				      soc_data->sram_max_volt);
+						    soc_data->sram_max_volt);
 			if (ret) {
 				regulator_set_voltage(drv->proc_reg, pre_voltage,
-					      soc_data->proc_max_volt);
+						      soc_data->proc_max_volt);
 				return ret;
 			}
 		}
@@ -138,9 +118,6 @@ static int mtk_ccifreq_set_voltage(struct mtk_ccifreq_drv *drv, int new_voltage)
 			return -EINVAL;
 		}
 	} while (voltage != new_voltage || vsram != new_vsram);
-
-	drv->cached_proc_volt = voltage;
-	drv->cached_sram_volt = vsram;
 
 	return 0;
 }
@@ -178,15 +155,9 @@ static int mtk_ccifreq_target(struct device *dev, unsigned long *freq,
 
 	pre_voltage = regulator_get_voltage(drv->proc_reg);
 	if (pre_voltage < 0) {
-		if (drv->cached_proc_volt > 0) {
-			dev_warn(dev, "use cached vproc value: %d\n",
-				 drv->cached_proc_volt);
-			pre_voltage = drv->cached_proc_volt;
-		} else {
-			dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
-			ret = pre_voltage;
-			goto out_unlock;
-		}
+		dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
+		ret = pre_voltage;
+		goto out_unlock;
 	}
 
 	/* scale up: set voltage first then freq. */
