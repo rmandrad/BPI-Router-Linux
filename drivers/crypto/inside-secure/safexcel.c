@@ -414,13 +414,13 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 	const struct firmware *fw[FW_NB];
 	char fw_path[37], *dir = NULL;
 	int i, j, ret = 0, pe;
-	int ipuesz, ifppsz, minifw = 0;
+	int ipuesz, ifppsz, minifw = 1;
 
 	if (priv->data->version == EIP197D_MRVL)
 		dir = "eip197d";
 	else if (priv->data->version == EIP197B_MRVL ||
 		 priv->data->version == EIP197_DEVBRD)
-		dir = "eip197b";
+		dir = "eip197_minifw";
 	else if (priv->data->version == EIP197C_MXL)
 		dir = "eip197c";
 	else
@@ -454,6 +454,9 @@ retry_fw:
 		       EIP197_PE(priv) + EIP197_PE_ICE_RAM_CTRL(pe));
 
 	ipuesz = eip197_write_firmware(priv, fw[FW_IPUE]);
+
+	for (j = 0; j < i; j++)
+		release_firmware(fw[j]);
 
 	if (eip197_start_firmware(priv, ipuesz, ifppsz, minifw)) {
 		dev_dbg(priv->dev, "Firmware loaded successfully\n");
@@ -605,7 +608,20 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 	 */
 	if (priv->flags & SAFEXCEL_HW_EIP197) {
 		val = readl(EIP197_HIA_AIC(priv) + EIP197_HIA_MST_CTRL);
+		/* Clear axi_burst_size and rx_burst_size */
+		val &= 0xffffff00;
+		/* Set axi_burst_size = 3, rx_burst_size = 3 */
+		val |= EIP197_MST_CTRL_RD_CACHE(3);
+		val |= EIP197_MST_CTRL_WD_CACHE(3);
 		val |= EIP197_MST_CTRL_TX_MAX_CMD(5);
+		writel(val, EIP197_HIA_AIC(priv) + EIP197_HIA_MST_CTRL);
+	}
+	/*
+	 * Set maximum number of TX commands to 2^4 = 16 for EIP97 HW2.1/HW2.3
+	 */
+	else {
+		val = 0;
+		val |= EIP97_MST_CTRL_TX_MAX_CMD(4);
 		writel(val, EIP197_HIA_AIC(priv) + EIP197_HIA_MST_CTRL);
 	}
 
@@ -795,6 +811,12 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 		ret = eip197_load_firmwares(priv);
 		if (ret)
 			return ret;
+	}
+
+	/* Allow clocks to be forced on for EIP197 */
+	if (priv->flags & SAFEXCEL_HW_EIP197) {
+		writel(0xffffffff, EIP197_HIA_GEN_CFG(priv) + EIP197_FORCE_CLOCK_ON);
+		writel(0xffffffff, EIP197_HIA_GEN_CFG(priv) + EIP197_FORCE_CLOCK_ON2);
 	}
 
 	return safexcel_hw_setup_cdesc_rings(priv) ?:
@@ -1016,7 +1038,6 @@ static inline void safexcel_handle_result_descriptor(struct safexcel_crypto_priv
 	int ret, i, nreq, ndesc, tot_descs, handled = 0;
 	bool should_complete;
 
-handle_results:
 	tot_descs = 0;
 
 	nreq = readl(EIP197_HIA_RDR(priv, ring) + EIP197_HIA_xDR_PROC_COUNT);
@@ -1025,6 +1046,7 @@ handle_results:
 	if (!nreq)
 		goto requests_left;
 
+	local_bh_disable();
 	for (i = 0; i < nreq; i++) {
 		req = safexcel_rdr_req_get(priv, ring);
 
@@ -1037,27 +1059,19 @@ handle_results:
 			goto acknowledge;
 		}
 
-		if (should_complete) {
-			local_bh_disable();
+		if (should_complete)
 			crypto_request_complete(req, ret);
-			local_bh_enable();
-		}
 
 		tot_descs += ndesc;
 		handled++;
 	}
+	local_bh_enable();
 
 acknowledge:
 	if (i)
 		writel(EIP197_xDR_PROC_xD_PKT(i) |
 		       (tot_descs * priv->config.rd_offset),
 		       EIP197_HIA_RDR(priv, ring) + EIP197_HIA_xDR_PROC_COUNT);
-
-	/* If the number of requests overflowed the counter, try to proceed more
-	 * requests.
-	 */
-	if (nreq == EIP197_xDR_PROC_xD_PKT_MASK)
-		goto handle_results;
 
 requests_left:
 	spin_lock_bh(&priv->ring[ring].lock);
@@ -1191,6 +1205,8 @@ static struct safexcel_alg_template *safexcel_algs[] = {
 	&safexcel_alg_cbc_des3_ede,
 	&safexcel_alg_ecb_aes,
 	&safexcel_alg_cbc_aes,
+	&safexcel_alg_cfb_aes,
+	&safexcel_alg_ofb_aes,
 	&safexcel_alg_ctr_aes,
 	&safexcel_alg_md5,
 	&safexcel_alg_sha1,
@@ -1218,6 +1234,7 @@ static struct safexcel_alg_template *safexcel_algs[] = {
 	&safexcel_alg_xts_aes,
 	&safexcel_alg_gcm,
 	&safexcel_alg_ccm,
+	&safexcel_alg_crc32,
 	&safexcel_alg_cbcmac,
 	&safexcel_alg_xcbcmac,
 	&safexcel_alg_cmac,
@@ -1228,6 +1245,8 @@ static struct safexcel_alg_template *safexcel_algs[] = {
 	&safexcel_alg_hmac_sm3,
 	&safexcel_alg_ecb_sm4,
 	&safexcel_alg_cbc_sm4,
+	&safexcel_alg_ofb_sm4,
+	&safexcel_alg_cfb_sm4,
 	&safexcel_alg_ctr_sm4,
 	&safexcel_alg_authenc_hmac_sha1_cbc_sm4,
 	&safexcel_alg_authenc_hmac_sm3_cbc_sm4,
@@ -1242,6 +1261,7 @@ static struct safexcel_alg_template *safexcel_algs[] = {
 	&safexcel_alg_hmac_sha3_384,
 	&safexcel_alg_hmac_sha3_512,
 	&safexcel_alg_authenc_hmac_sha1_cbc_des,
+	&safexcel_alg_authenc_hmac_md5_cbc_des3_ede,
 	&safexcel_alg_authenc_hmac_sha256_cbc_des3_ede,
 	&safexcel_alg_authenc_hmac_sha224_cbc_des3_ede,
 	&safexcel_alg_authenc_hmac_sha512_cbc_des3_ede,
@@ -1811,6 +1831,7 @@ static void safexcel_remove(struct platform_device *pdev)
 		irq_set_affinity_hint(priv->ring[i].irq, NULL);
 		destroy_workqueue(priv->ring[i].workqueue);
 	}
+
 }
 
 static const struct safexcel_priv_data eip97ies_mrvl_data = {
@@ -2025,12 +2046,12 @@ static void __exit safexcel_exit(void)
 module_init(safexcel_init);
 module_exit(safexcel_exit);
 
+MODULE_IMPORT_NS("CRYPTO_INTERNAL");
 MODULE_AUTHOR("Antoine Tenart <antoine.tenart@free-electrons.com>");
 MODULE_AUTHOR("Ofer Heifetz <oferh@marvell.com>");
 MODULE_AUTHOR("Igal Liberman <igall@marvell.com>");
 MODULE_DESCRIPTION("Support for SafeXcel cryptographic engines: EIP97 & EIP197");
 MODULE_LICENSE("GPL v2");
-MODULE_IMPORT_NS("CRYPTO_INTERNAL");
 
 MODULE_FIRMWARE("ifpp.bin");
 MODULE_FIRMWARE("ipue.bin");
