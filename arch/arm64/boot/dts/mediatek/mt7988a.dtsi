@@ -23,6 +23,10 @@
 	cci_opp: opp-table-cci {
 		compatible = "operating-points-v2";
 		opp-shared;
+		opp-40000000 {
+			opp-hz = /bits/ 64 <40000000>;
+			opp-microvolt = <850000>;  
+		};
 		opp-480000000 {
 			opp-hz = /bits/ 64 <480000000>;
 			opp-microvolt = <850000>;
@@ -30,6 +34,10 @@
 		opp-660000000 {
 			opp-hz = /bits/ 64 <660000000>;
 			opp-microvolt = <850000>;
+		};
+		opp-830400000 {
+			opp-hz = /bits/ 64 <830400000>;
+			opp-microvolt = <850000>; 
 		};
 		opp-900000000 {
 			opp-hz = /bits/ 64 <900000000>;
