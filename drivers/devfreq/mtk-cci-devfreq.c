@@ -153,6 +153,9 @@ static int mtk_ccifreq_target(struct device *dev, unsigned long *freq,
 	voltage = dev_pm_opp_get_voltage(opp);
 	dev_pm_opp_put(opp);
 
+	/* Align requested frequency with the OPP's rounded frequency */
+	*freq = opp_rate;
+
 	pre_voltage = regulator_get_voltage(drv->proc_reg);
 	if (pre_voltage < 0) {
 		dev_err(dev, "invalid vproc value: %d\n", pre_voltage);
