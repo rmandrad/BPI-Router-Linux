@@ -87,7 +87,7 @@ case $board in
 		DTSI=arch/arm/boot/dts/mediatek/mt7623.dtsi
 		;;
 esac
-#echo "DTB:${DTS%.*}.dtb"
+echo "DTB:${DTS%.*}.dtb"
 export ARCH=$ARCH;
 
 #defconfig-override
@@ -850,6 +850,12 @@ function build {
 					ENTRY=80008000
 				;;
 			esac
+
+			echo $builddir
+			echo $IMAGE
+			echo $builddir/$IMAGE
+			rm -f $builddir/${IMAGE%.*}* 2>/dev/null
+			gzip -k -f $builddir/$IMAGE
 
 			if [[ "$builddir" != "" ]];
 			then
