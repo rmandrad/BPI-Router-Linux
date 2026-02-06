@@ -5362,22 +5362,27 @@ static void mux_poll(struct work_struct *work)
 	unsigned int new_channel;
 	struct phylink *tmp_pl;
 	int sfp_present;
+	bool running;
 
 	//dev_info(eth->dev, "ethernet mux: %s:%d\n",__func__,__LINE__);
 	if (IS_ERR(mux->mod_def0_gpio) || IS_ERR(mux->chan_sel_gpio))
 		goto reschedule;
 
 	sfp_present = gpiod_get_value_cansleep(mux->mod_def0_gpio);
+	if (sfp_present < 0)
+		goto reschedule;
 	new_channel = sfp_present ? mux->sfp_present_channel : !mux->sfp_present_channel;
 
-	if (mux->channel == new_channel || !netif_running(dev))
+	if (mux->channel == new_channel)
 		goto reschedule;
+
+	running = netif_running(dev);
 
 	dev_info(eth->dev, "ethernet mux: line:%d new channel:%d,sfp:%d\n",__LINE__, new_channel,sfp_present);
 
 	rtnl_lock();
-	mtk_stop(dev);
-	rtnl_unlock();
+	if (running)
+		mtk_stop(dev);
 
 	/* Destroy old phylink if it exists */
 	if (mux->data[mux->channel] && mux->data[mux->channel]->phylink) {
@@ -5409,14 +5414,13 @@ static void mux_poll(struct work_struct *work)
 	mac->of_node = mux->data[new_channel]->of_node;
 	mac->phylink = mux->data[new_channel]->phylink;
 
-	rtnl_lock();
-	mtk_open(dev);
-	rtnl_unlock();
+	if (running)
+		mtk_open(dev);
 
 	gpiod_set_value_cansleep(mux->chan_sel_gpio, new_channel);
 	mux->channel = new_channel;
+	rtnl_unlock();
 	goto reschedule;
-
 out_unlock:
 	rtnl_unlock();
 reschedule:
@@ -5516,7 +5520,8 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 	struct device_node *child;
 	struct mtk_mux *mux;
 	unsigned int id;
-	int err;
+	unsigned int initial_channel;
+	int err, sfp_present;
 
 	if (!_id) {
 		dev_err(eth->dev, "missing attach mac id\n");
@@ -5529,7 +5534,7 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 		return -EINVAL;
 	}
 
-	mux = kmalloc(sizeof(struct mtk_mux), GFP_KERNEL);
+	mux = kzalloc(sizeof(struct mtk_mux), GFP_KERNEL);
 	if (unlikely(!mux)) {
 		dev_err(eth->dev, "failed to create mux structure\n");
 		return -ENOMEM;
@@ -5537,7 +5542,6 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 
 	eth->mux[id] = mux;
 	mux->mac = eth->mac[id];
-	mux->channel = 0;//more than channels, just to make current channel invalid for switching the first time the gpio is read
 
 	mux->mod_def0_gpio = fwnode_gpiod_get_index(of_fwnode_handle(np),
 				"mod-def0", 0, GPIOD_IN |
@@ -5558,8 +5562,11 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 		goto err_put_mod_def0;
 	}
 
-	of_property_read_u32(np, "sfp-present-channel",
-		&mux->sfp_present_channel);
+	if (of_property_read_u32(np, "sfp-present-channel",
+				 &mux->sfp_present_channel))
+		mux->sfp_present_channel = 0;
+	else if (mux->sfp_present_channel > 1)
+		mux->sfp_present_channel = 1;
 
 	for_each_child_of_node(np, child) {
 		err = mtk_add_mux_channel(mux, child);
@@ -5571,7 +5578,18 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 		//should set initial mux->channel be set if ! mux->sfp_present_channel?
 	}
 
-	gpiod_set_value_cansleep(mux->chan_sel_gpio, mux->sfp_present_channel ? 0 : 1);
+	/* Configure initial mux channel based on current module presence. */
+	sfp_present = gpiod_get_value_cansleep(mux->mod_def0_gpio);
+	if (sfp_present < 0) {
+		dev_warn(eth->dev, "failed to read mod-def0 gpio, defaulting to non-SFP channel\n");
+		initial_channel = !mux->sfp_present_channel;
+	} else {
+		initial_channel = sfp_present ? mux->sfp_present_channel :
+						!mux->sfp_present_channel;
+	}
+	gpiod_set_value_cansleep(mux->chan_sel_gpio, initial_channel);
+	/* Force first poll pass to (re)build phylink for selected channel. */
+	mux->channel = !initial_channel;
 
 	dev_info(eth->dev, "ethernet mux: line:%d added new mux\n",__LINE__);
 	INIT_DELAYED_WORK(&mux->poll, mux_poll);
