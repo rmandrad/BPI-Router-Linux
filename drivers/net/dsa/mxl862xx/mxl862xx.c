@@ -359,17 +359,36 @@ static enum dsa_tag_protocol mxl862_parse_tag_proto(struct dsa_switch *ds, uint8
 {
 	/* Default value if no dt entry found */
 	enum dsa_tag_protocol tag_proto = DSA_TAG_PROTO_MXL862;
-	struct dsa_port *dp = (struct dsa_port *)dsa_to_port(ds, port);
-	const char *user_protocol = NULL;
+	struct dsa_port *dp = dsa_to_port(ds, port);
+	const char *selected_proto = "mxl862";
+	const char *user_protocol;
+	int ret;
 
-	if (dp != NULL)
-		user_protocol = of_get_property(dp->dn, "dsa-tag-protocol", NULL);
-	if (user_protocol != NULL) {
-		if (strcmp("mxl862", user_protocol) == 0)
-			tag_proto = DSA_TAG_PROTO_MXL862;
-		else if (strcmp("mxl862_8021q", user_protocol) == 0)
-			tag_proto = DSA_TAG_PROTO_MXL862_8021Q;
+	if (!dp || !dp->dn)
+		return tag_proto;
+
+	ret = of_property_read_string(dp->dn, "dsa-tag-protocol", &user_protocol);
+	if (ret) {
+		dev_info(ds->dev,
+			 "port %u has no dsa-tag-protocol in DT, using %s\n",
+			 port, selected_proto);
+		return tag_proto;
 	}
+
+	if (!strcmp(user_protocol, "mxl862"))
+		tag_proto = DSA_TAG_PROTO_MXL862;
+	else if (!strcmp(user_protocol, "mxl862_8021q")) {
+		tag_proto = DSA_TAG_PROTO_MXL862_8021Q;
+		selected_proto = "mxl862_8021q";
+	} else {
+		dev_warn(ds->dev,
+			 "port %u has unsupported dsa-tag-protocol \"%s\", falling back to mxl862\n",
+			 port, user_protocol);
+	}
+
+	dev_info(ds->dev, "port %u dsa-tag-protocol=\"%s\" -> using %s\n",
+		 port, user_protocol, selected_proto);
+
 	return tag_proto;
 }
 
@@ -3202,6 +3221,11 @@ static void mxl862xx_port_stp_state_set(struct dsa_switch *ds, int port,
 	struct mxl862xx_priv *priv = ds->priv;
 	int ret;
 
+	/* CPU port does not participate in bridge STP states on this switch. */
+	if (dsa_is_cpu_port(ds, port)) {
+		return;
+	}
+
 	switch (state) {
 	case BR_STATE_DISABLED:
 		param.port_state = MXL862XX_STP_PORT_STATE_DISABLE;
@@ -3732,6 +3756,30 @@ static void sfp_monitor_work_func(struct work_struct *work)
 	if (mux->channel == new_channel)
 		goto reschedule;
 
+	/* Create channel phylink lazily to avoid boot-time SFP probe stalls. */
+	if (!mux->data[new_channel]->phylink) {
+		phy_interface_t phy_mode;
+
+		if (of_get_phy_mode(mux->data[new_channel]->of_node, &phy_mode)) {
+			dev_err(ds->dev, "dsa mux: channel %u has invalid phy-mode\n",
+				new_channel);
+			goto reschedule;
+		}
+
+		mux->data[new_channel]->phylink =
+			phylink_create(&mux->dp->pl_config,
+				       of_fwnode_handle(mux->data[new_channel]->of_node),
+				       phy_mode, ds->phylink_mac_ops);
+		if (IS_ERR(mux->data[new_channel]->phylink)) {
+			dev_err(ds->dev, "dsa mux: failed to create phylink for channel %u\n",
+				new_channel);
+			mux->data[new_channel]->phylink = NULL;
+			goto reschedule;
+		}
+		dev_info(ds->dev, "dsa mux: created phylink for channel %u\n",
+			 new_channel);
+	}
+
 	running = dev && netif_running(dev);
 
 	rtnl_lock();
@@ -3766,7 +3814,6 @@ static int ds_add_mux_channel(struct combo_port_mux *mux, struct device_node *np
 	const __be32 *_id = of_get_property(np, "reg", NULL);
 	struct dsa_switch *ds = mux->dp->ds;
 	struct dp_mux_data *data;
-	struct phylink *phylink;
 	phy_interface_t phy_mode;
 	int id, err;
 
@@ -3793,17 +3840,23 @@ static int ds_add_mux_channel(struct combo_port_mux *mux, struct device_node *np
 		goto err_free_data;
 	}
 
-	phylink = phylink_create(&mux->dp->pl_config,
-				 of_fwnode_handle(np),
-				 phy_mode, ds->phylink_mac_ops);
-	if (IS_ERR(phylink)) {
-		dev_err(ds->dev, "failed to create phylink structure\n");
-		err = PTR_ERR(phylink);
-		goto err_free_data;
-	}
-
 	data->of_node = np;
-	data->phylink = phylink;
+	/* Defer SFP channel phylink creation to runtime switch to avoid
+	 * boot-time hangs when modules are already inserted.
+	 */
+	if (id == mux->sfp_present_channel) {
+		data->phylink = NULL;
+		dev_info(ds->dev, "dsa mux: channel %d phylink deferred\n", id);
+	} else {
+		data->phylink = phylink_create(&mux->dp->pl_config,
+					       of_fwnode_handle(np),
+					       phy_mode, ds->phylink_mac_ops);
+		if (IS_ERR(data->phylink)) {
+			dev_err(ds->dev, "failed to create phylink structure\n");
+			err = PTR_ERR(data->phylink);
+			goto err_free_data;
+		}
+	}
 	mux->data[id] = data;
 
 	return 0;
@@ -3865,19 +3918,19 @@ static int ds_add_mux(struct mxl862xx_priv *priv, struct device_node *np)
 
 	priv->ds_mux[id] = mux;
 	mux->dp = dsa_to_port(priv->ds, id);
-	/* Configure initial channel based on current module presence. */
+	/* Keep probe deterministic: always start from non-SFP channel.
+	 * The monitor worker will switch to SFP channel after boot if needed.
+	 */
 	sfp_present = gpiod_get_value_cansleep(mux->mod_def0_gpio);
 	if (sfp_present < 0) {
 		dev_warn(priv->dev,
-			 "failed to read mod-def0 gpio, defaulting to non-SFP channel\n");
-		mux->channel = !mux->sfp_present_channel;
-	} else {
-		mux->channel = sfp_present ? mux->sfp_present_channel :
-					     !mux->sfp_present_channel;
+			 "failed to read mod-def0 gpio, forcing non-SFP init channel\n");
 	}
+	mux->channel = !mux->sfp_present_channel;
 	gpiod_set_value_cansleep(mux->chan_sel_gpio, mux->channel);
-	dev_info(priv->dev, "dsa mux: id %u init channel %u (sfp-present-channel=%u)\n",
-		 id, mux->channel, mux->sfp_present_channel);
+	dev_info(priv->dev,
+		 "dsa mux: id %u init channel %u (forced non-SFP, sfp-present-channel=%u, mod-def0=%d)\n",
+		 id, mux->channel, mux->sfp_present_channel, sfp_present);
 
 	for_each_child_of_node(np, child) {
 		err = ds_add_mux_channel(mux, child);
@@ -4023,9 +4076,8 @@ static int mxl862xx_probe(struct mdio_device *mdiodev)
 				dev_err(dev, "failed to add mux\n");
 			else
 				dev_info(dev, "probe: ds-mux added\n");
-
-			of_node_put(mux_np);
 		};
+		of_node_put(mux_np);
 	}
 	dev_info(dev, "probe: complete\n");
 

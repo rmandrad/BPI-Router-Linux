@@ -471,17 +471,29 @@ static int dsa_port_setup(struct dsa_port *dp)
 	if (dp->setup)
 		return 0;
 
+	dev_info(ds->dev, "dsa_port_setup: port %d type %d begin\n",
+		 dp->index, dp->type);
 	err = dsa_port_devlink_setup(dp);
+	dev_info(ds->dev, "dsa_port_setup: port %d devlink setup err=%d\n",
+		 dp->index, err);
 	if (err)
 		return err;
 
 	switch (dp->type) {
 	case DSA_PORT_TYPE_UNUSED:
+		dev_info(ds->dev, "dsa_port_setup: port %d unused -> disable\n",
+			 dp->index);
 		dsa_port_disable(dp);
 		break;
 	case DSA_PORT_TYPE_CPU:
 		if (dp->dn) {
+			dev_info(ds->dev,
+				 "dsa_port_setup: cpu port %d phylink register begin\n",
+				 dp->index);
 			err = dsa_shared_port_link_register_of(dp);
+			dev_info(ds->dev,
+				 "dsa_port_setup: cpu port %d phylink register err=%d\n",
+				 dp->index, err);
 			if (err)
 				break;
 			dsa_port_link_registered = true;
@@ -491,7 +503,13 @@ static int dsa_port_setup(struct dsa_port *dp)
 				 dp->index);
 		}
 
+		dev_info(ds->dev,
+			 "dsa_port_setup: cpu port %d enable begin\n",
+			 dp->index);
 		err = dsa_port_enable(dp, NULL);
+		dev_info(ds->dev,
+			 "dsa_port_setup: cpu port %d enable err=%d\n",
+			 dp->index, err);
 		if (err)
 			break;
 		dsa_port_enabled = true;
@@ -499,7 +517,13 @@ static int dsa_port_setup(struct dsa_port *dp)
 		break;
 	case DSA_PORT_TYPE_DSA:
 		if (dp->dn) {
+			dev_info(ds->dev,
+				 "dsa_port_setup: dsa port %d phylink register begin\n",
+				 dp->index);
 			err = dsa_shared_port_link_register_of(dp);
+			dev_info(ds->dev,
+				 "dsa_port_setup: dsa port %d phylink register err=%d\n",
+				 dp->index, err);
 			if (err)
 				break;
 			dsa_port_link_registered = true;
@@ -509,7 +533,13 @@ static int dsa_port_setup(struct dsa_port *dp)
 				 dp->index);
 		}
 
+		dev_info(ds->dev,
+			 "dsa_port_setup: dsa port %d enable begin\n",
+			 dp->index);
 		err = dsa_port_enable(dp, NULL);
+		dev_info(ds->dev,
+			 "dsa_port_setup: dsa port %d enable err=%d\n",
+			 dp->index, err);
 		if (err)
 			break;
 		dsa_port_enabled = true;
@@ -517,7 +547,11 @@ static int dsa_port_setup(struct dsa_port *dp)
 		break;
 	case DSA_PORT_TYPE_USER:
 		of_get_mac_address(dp->dn, dp->mac);
+		dev_info(ds->dev, "dsa_port_setup: user port %d create begin\n",
+			 dp->index);
 		err = dsa_user_create(dp);
+		dev_info(ds->dev, "dsa_port_setup: user port %d create err=%d\n",
+			 dp->index, err);
 		break;
 	}
 
@@ -531,6 +565,8 @@ static int dsa_port_setup(struct dsa_port *dp)
 	}
 
 	dp->setup = true;
+	dev_info(ds->dev, "dsa_port_setup: port %d type %d complete\n",
+		 dp->index, dp->type);
 
 	return 0;
 }
@@ -818,10 +854,17 @@ static int dsa_tree_setup_switches(struct dsa_switch_tree *dst)
 static int dsa_tree_setup_conduit(struct dsa_switch_tree *dst)
 {
 	struct dsa_port *cpu_dp;
+	bool have_rtnl;
 	int err = 0;
 
 	pr_info("DSA: tree %d setup_conduit: begin\n", dst->index);
-	rtnl_lock();
+	have_rtnl = rtnl_is_locked();
+	pr_info("DSA: tree %d setup_conduit: before rtnl_lock (have_rtnl=%d)\n",
+		dst->index, have_rtnl);
+	if (!have_rtnl)
+		rtnl_lock();
+	pr_info("DSA: tree %d setup_conduit: entered critical section\n",
+		dst->index);
 
 	dsa_tree_for_each_cpu_port(cpu_dp, dst) {
 		struct net_device *conduit = cpu_dp->conduit;
@@ -844,7 +887,10 @@ static int dsa_tree_setup_conduit(struct dsa_switch_tree *dst)
 						   netif_oper_up(conduit));
 	}
 
-	rtnl_unlock();
+	if (!have_rtnl)
+		rtnl_unlock();
+	pr_info("DSA: tree %d setup_conduit: exit critical section\n",
+		dst->index);
 	pr_info("DSA: tree %d setup_conduit: end err=%d\n", dst->index, err);
 
 	return err;
@@ -853,8 +899,10 @@ static int dsa_tree_setup_conduit(struct dsa_switch_tree *dst)
 static void dsa_tree_teardown_conduit(struct dsa_switch_tree *dst)
 {
 	struct dsa_port *cpu_dp;
+	bool have_rtnl = rtnl_is_locked();
 
-	rtnl_lock();
+	if (!have_rtnl)
+		rtnl_lock();
 
 	dsa_tree_for_each_cpu_port(cpu_dp, dst) {
 		struct net_device *conduit = cpu_dp->conduit;
@@ -868,7 +916,8 @@ static void dsa_tree_teardown_conduit(struct dsa_switch_tree *dst)
 		dsa_conduit_teardown(conduit);
 	}
 
-	rtnl_unlock();
+	if (!have_rtnl)
+		rtnl_unlock();
 }
 
 static int dsa_tree_setup_lags(struct dsa_switch_tree *dst)
