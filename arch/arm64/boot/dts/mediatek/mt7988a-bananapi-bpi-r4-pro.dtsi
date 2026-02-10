@@ -94,6 +94,11 @@
 		regulator-always-on;
 	};
 
+	psci {
+		compatible  = "arm,psci-0.2";
+		method      = "smc";
+	};
+
 	/* SFP1 cage (LAN) */
 	sfp1: sfp1 {
 		compatible = "sff,sfp";
@@ -660,6 +665,10 @@
 };
 
 &watchdog {
+	status = "okay";
+};
+
+&lvts {
 	status = "okay";
 };
 
