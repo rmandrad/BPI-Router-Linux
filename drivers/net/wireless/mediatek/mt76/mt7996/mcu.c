@@ -4336,10 +4336,13 @@ mt7996_mcu_set_obss_spr_siga(struct mt7996_phy *phy,
 	};
 	int ret;
 
-	if (he_obss_pd->sr_ctrl & IEEE80211_HE_SPR_HESIGA_SR_VAL15_ALLOWED)
-		req.flag[req.omac] = 0xf;
-	else
+	if (!(he_obss_pd->sr_ctrl & IEEE80211_HE_SPR_HESIGA_SR_VAL15_ALLOWED))
 		return 0;
+
+	if (req.omac >= ARRAY_SIZE(req.flag))
+		return -EINVAL;
+
+	req.flag[req.omac] = 0xf;
 
 	/* switch to normal AP mode */
 	ret = mt7996_mcu_enable_obss_spr(phy, UNI_CMD_SR_ENABLE_MODE, 0);
@@ -4372,6 +4375,9 @@ mt7996_mcu_set_obss_spr_bitmap(struct mt7996_phy *phy,
 		.len = cpu_to_le16(sizeof(req) - 4),
 	};
 	u32 bitmap;
+
+	if (req.band_idx >= ARRAY_SIZE(req.color_l))
+		return -EINVAL;
 
 	memcpy(&bitmap, he_obss_pd->bss_color_bitmap, sizeof(bitmap));
 	req.color_l[req.band_idx] = cpu_to_le32(bitmap);
