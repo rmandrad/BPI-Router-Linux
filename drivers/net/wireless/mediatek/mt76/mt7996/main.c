@@ -864,6 +864,10 @@ mt7996_link_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 				   !!(changed & BSS_CHANGED_BSSID));
 	}
 
+	if (changed & BSS_CHANGED_HT || changed & BSS_CHANGED_ERP_CTS_PROT)
+		mt7996_mcu_set_protection(phy, link, info->ht_operation_mode,
+					  info->use_cts_prot);
+
 	if (changed & BSS_CHANGED_ERP_SLOT) {
 		int slottime = info->use_short_slot ? 9 : 20;
 
@@ -2176,6 +2180,7 @@ mt7996_net_fill_forward_path(struct ieee80211_hw *hw,
 	struct mtk_wed_device *wed = &dev->mt76.mmio.wed;
 	struct mt7996_sta_link *msta_link;
 	struct mt7996_vif_link *link;
+	u8 wdma_idx;
 
 	link = mt7996_vif_link(dev, vif, msta->deflink_id);
 	if (!link)
@@ -2199,12 +2204,16 @@ mt7996_net_fill_forward_path(struct ieee80211_hw *hw,
 
 	path->type = DEV_PATH_MTK_WDMA;
 	path->dev = ctx->dev;
+	wdma_idx = link->mt76.band_idx;
+
+	if (is_mt7996(&dev->mt76) && mt76_npu_device_active(&dev->mt76) &&
+	    msta_link->wcid.phy_idx == MT_BAND2)
+		wdma_idx = 1;
 #ifdef CONFIG_NET_MEDIATEK_SOC_WED
 	if (mtk_wed_device_active(wed))
-		path->mtk_wdma.wdma_idx = wed->wdma_idx;
-	else
+		wdma_idx = wed->wdma_idx;
 #endif
-		path->mtk_wdma.wdma_idx = link->mt76.band_idx;
+	path->mtk_wdma.wdma_idx = wdma_idx;
 	path->mtk_wdma.bss = link->mt76.idx;
 	path->mtk_wdma.queue = 0;
 	path->mtk_wdma.wcid = msta_link->wcid.idx;
@@ -2275,6 +2284,21 @@ mt7996_reconfig_complete(struct ieee80211_hw *hw,
 					     MT7996_WATCHDOG_TIME);
 }
 
+static int
+mt7996_set_eml_op_mode(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+		       struct ieee80211_sta *sta,
+		       struct ieee80211_eml_params *eml_params)
+{
+	struct mt7996_dev *dev = mt7996_hw_dev(hw);
+	int ret;
+
+	mutex_lock(&dev->mt76.mutex);
+	ret = mt7996_mcu_set_emlsr_mode(dev, vif, sta, eml_params);
+	mutex_unlock(&dev->mt76.mutex);
+
+	return ret;
+}
+
 const struct ieee80211_ops mt7996_ops = {
 	.add_chanctx = mt76_add_chanctx,
 	.remove_chanctx = mt76_remove_chanctx,
@@ -2337,4 +2361,5 @@ const struct ieee80211_ops mt7996_ops = {
 	.change_vif_links = mt7996_change_vif_links,
 	.change_sta_links = mt7996_mac_sta_change_links,
 	.reconfig_complete = mt7996_reconfig_complete,
+	.set_eml_op_mode = mt7996_set_eml_op_mode,
 };

@@ -2543,6 +2543,7 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	if (mtk_wed_device_active(&dev->mt76.mmio.wed))
 		mtk_wed_device_stop(&dev->mt76.mmio.wed);
 
+	mt7996_npu_hw_stop(dev);
 	ieee80211_stop_queues(mt76_hw(dev));
 
 	set_bit(MT76_RESET, &dev->mphy.state);
@@ -2563,13 +2564,18 @@ void mt7996_mac_reset_work(struct work_struct *work)
 		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
 			continue;
 
+		if (mt76_npu_device_active(&dev->mt76) &&
+		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
+			continue;
+
+		if (mt76_queue_is_npu_txfree(&dev->mt76.q_rx[i]))
+			continue;
+
 		napi_disable(&dev->mt76.napi[i]);
 	}
 	napi_disable(&dev->mt76.tx_napi);
 
 	mutex_lock(&dev->mt76.mutex);
-
-	mt7996_npu_hw_stop(dev);
 
 	mt76_wr(dev, MT_MCU_INT_EVENT, MT_MCU_INT_EVENT_DMA_STOPPED);
 
@@ -2609,6 +2615,8 @@ void mt7996_mac_reset_work(struct work_struct *work)
 				     MT_INT_TX_RX_DONE_EXT);
 	}
 
+	__mt7996_npu_hw_init(dev);
+
 	clear_bit(MT76_MCU_RESET, &dev->mphy.state);
 	mt7996_for_each_phy(dev, phy)
 		clear_bit(MT76_RESET, &phy->mt76->state);
@@ -2616,6 +2624,13 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	mt76_for_each_q_rx(&dev->mt76, i) {
 		if (mtk_wed_device_active(&dev->mt76.mmio.wed) &&
 		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
+			continue;
+
+		if (mt76_npu_device_active(&dev->mt76) &&
+		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
+			continue;
+
+		if (mt76_queue_is_npu_txfree(&dev->mt76.q_rx[i]))
 			continue;
 
 		napi_enable(&dev->mt76.napi[i]);
@@ -2637,8 +2652,6 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	mt7996_update_beacons(dev);
 
 	mutex_unlock(&dev->mt76.mutex);
-
-	mt7996_npu_hw_init(dev);
 
 	mt7996_for_each_phy(dev, phy)
 		ieee80211_queue_delayed_work(hw, &phy->mt76->mac_work,

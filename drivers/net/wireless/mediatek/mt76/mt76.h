@@ -55,6 +55,8 @@
 				 FIELD_PREP(MT_QFLAG_WED_RING, _n))
 #define MT_NPU_Q_TX(_n)		__MT_NPU_Q(MT76_WED_Q_TX, _n)
 #define MT_NPU_Q_RX(_n)		__MT_NPU_Q(MT76_WED_Q_RX, _n)
+#define MT_NPU_Q_TXFREE(_n)	(FIELD_PREP(MT_QFLAG_WED_TYPE, MT76_WED_Q_TXFREE) | \
+				 FIELD_PREP(MT_QFLAG_WED_RING, _n))
 
 struct mt76_dev;
 struct mt76_phy;
@@ -540,7 +542,6 @@ struct mt76_driver_ops {
 	u32 survey_flags;
 	u16 txwi_size;
 	u16 token_size;
-	u8 mcs_rates;
 
 	unsigned int link_data_size;
 
@@ -1649,6 +1650,9 @@ void mt76_npu_txdesc_cleanup(struct mt76_queue *q, int index);
 int mt76_npu_net_setup_tc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			  struct net_device *dev, enum tc_setup_type type,
 			  void *type_data);
+int mt76_npu_send_txrx_addr(struct mt76_dev *dev, int ifindex,
+			    u32 direction, u32 i_count_addr,
+			    u32 o_status_addr, u32 o_count_addr);
 #else
 static inline void mt76_npu_check_ppe(struct mt76_dev *dev,
 				      struct sk_buff *skb, u32 info)
@@ -1704,6 +1708,13 @@ static inline int mt76_npu_net_setup_tc(struct ieee80211_hw *hw,
 					struct net_device *dev,
 					enum tc_setup_type type,
 					void *type_data)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int mt76_npu_send_txrx_addr(struct mt76_dev *dev, int ifindex,
+					  u32 direction, u32 i_count_addr,
+					  u32 o_status_addr, u32 o_count_addr)
 {
 	return -EOPNOTSUPP;
 }
@@ -1991,6 +2002,14 @@ static inline bool mt76_queue_is_npu_rx(struct mt76_queue *q)
 {
 	return mt76_queue_is_npu(q) &&
 	       FIELD_GET(MT_QFLAG_WED_TYPE, q->flags) == MT76_WED_Q_RX;
+}
+
+static inline bool mt76_queue_is_npu_txfree(struct mt76_queue *q)
+{
+	if (q->flags & MT_QFLAG_WED)
+		return false;
+
+	return FIELD_GET(MT_QFLAG_WED_TYPE, q->flags) == MT76_WED_Q_TXFREE;
 }
 
 struct mt76_txwi_cache *
