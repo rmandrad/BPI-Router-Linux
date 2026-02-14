@@ -209,7 +209,7 @@ void ieee80211_rx_eml_op_mode_notif(struct ieee80211_sub_if_data *sdata,
 				return;
 
 			trans_delay = u8_get_bits(ptr[2],
-					IEEE80211_EML_EMLSR_TRANS_DELAY);
+						  IEEE80211_EML_EMLSR_TRANS_DELAY);
 			if (trans_delay >
 			    IEEE80211_EML_CAP_EMLSR_TRANSITION_DELAY_256US)
 				return;
