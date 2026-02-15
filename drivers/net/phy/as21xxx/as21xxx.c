@@ -331,7 +331,7 @@ EXPORT_SYMBOL(custome_cfg);
 #define PHY_ID_AS22XXX			0x750094a0
 #define AEON_MAX_LEDS			5
 #define AEON_IPC_DELAY			10000
-#define AEON_IPC_TIMEOUT		(AEON_IPC_DELAY * 100)
+#define AEON_IPC_TIMEOUT		(AEON_IPC_DELAY * 500)
 #define AEON_IPC_DATA_NUM_REGISTERS	8
 #define AEON_IPC_DATA_MAX		(AEON_IPC_DATA_NUM_REGISTERS * sizeof(u16))
 #define AEON_BOOT_ADDR			0x1000
@@ -782,7 +782,7 @@ static int aeon_ipc_send_cmd(struct phy_device *phydev,
 				(val & AEON_IPC_STS_STATUS) != AEON_IPC_STS_STATUS_PROCESS &&
 				(val & AEON_IPC_STS_STATUS) != AEON_IPC_STS_STATUS_BUSY) ||
 				(val < 0),
-				10000, 2000000, false,
+				10000, AEON_IPC_TIMEOUT, false,
 				phydev, MDIO_MMD_VEND1, VEND1_IPC_STS);
 	if (val < 0)
 		ret = val;
@@ -1544,7 +1544,7 @@ static int aeon_wait_reset_complete(struct phy_device *phydev)
 	int val;
 
 	return read_poll_timeout(aeon_ipc_get_fw_version, val,
-				 val == 0, 10000, 2000000, false, phydev);
+				 val == 0, 10000, AEON_IPC_TIMEOUT, false, phydev);
 }
 
 static int aeon_gen1_config_init(struct phy_device *phydev)
