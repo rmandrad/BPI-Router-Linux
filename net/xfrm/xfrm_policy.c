@@ -3796,6 +3796,15 @@ int __xfrm_policy_check(struct sock *sk, int dir, struct sk_buff *skb,
 	}
 #endif
 
+	/* Inbound HW packet-offload traffic is validated by device policy and
+	 * should bypass the software template walk here.
+	 */
+	if (pol->xdo.type == XFRM_DEV_OFFLOAD_PACKET &&
+	    pol->xdo.dir == XFRM_DEV_OFFLOAD_IN) {
+		xfrm_pols_put(pols, npols);
+		return 1;
+	}
+
 	if (pol->action == XFRM_POLICY_ALLOW) {
 		static struct sec_path dummy;
 		struct xfrm_tmpl *tp[XFRM_MAX_DEPTH];
@@ -3803,6 +3812,13 @@ int __xfrm_policy_check(struct sock *sk, int dir, struct sk_buff *skb,
 		struct xfrm_tmpl **tpp = tp;
 		int ti = 0;
 		int i, k;
+
+		/* Option 2: keep FWD bypass only for packet offload context. */
+		if (dir == XFRM_POLICY_FWD &&
+		    pol->xdo.type == XFRM_DEV_OFFLOAD_PACKET) {
+			xfrm_pols_put(pols, npols);
+			return 1;
+		}
 
 		sp = skb_sec_path(skb);
 		if (!sp)

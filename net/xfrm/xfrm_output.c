@@ -585,7 +585,17 @@ out:
 
 int xfrm_output_resume(struct sock *sk, struct sk_buff *skb, int err)
 {
-	struct net *net = xs_net(skb_dst(skb)->xfrm);
+	struct dst_entry *dst = skb_dst(skb);
+	struct net *net = NULL;
+
+	/* If an IPsec tunnel is HW offloaded, packets may have been
+	 * fragmented earlier from xfrm_dev_offload_ok(). If fragmentation
+	 * fails, the original skb can still reach this path without xfrm dst.
+	 */
+	if (unlikely(!dst || !dst->xfrm))
+		return -EINVAL;
+
+	net = xs_net(dst->xfrm);
 
 	while (likely((err = xfrm_output_one(skb, err)) == 0)) {
 		nf_reset_ct(skb);
@@ -611,40 +621,6 @@ out:
 	return err;
 }
 EXPORT_SYMBOL_GPL(xfrm_output_resume);
-
-static int xfrm_dev_direct_output(struct sock *sk, struct xfrm_state *x,
-				  struct sk_buff *skb)
-{
-	struct dst_entry *dst = skb_dst(skb);
-	struct net *net = xs_net(x);
-	int err;
-
-	dst = skb_dst_pop(skb);
-	if (!dst) {
-		XFRM_INC_STATS(net, LINUX_MIB_XFRMOUTERROR);
-		kfree_skb(skb);
-		return -EHOSTUNREACH;
-	}
-	skb_dst_set(skb, dst);
-	nf_reset_ct(skb);
-
-	err = skb_dst(skb)->ops->local_out(net, sk, skb);
-	if (unlikely(err != 1)) {
-		kfree_skb(skb);
-		return err;
-	}
-
-	/* In transport mode, network destination is
-	 * directly reachable, while in tunnel mode,
-	 * inner packet network may not be. In packet
-	 * offload type, HW is responsible for hard
-	 * header packet mangling so directly xmit skb
-	 * to netdevice.
-	 */
-	skb->dev = x->xso.dev;
-	__skb_push(skb, skb->dev->hard_header_len);
-	return dev_queue_xmit(skb);
-}
 
 static int xfrm_output2(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
@@ -769,18 +745,16 @@ int xfrm_output(struct sock *sk, struct sk_buff *skb)
 			return -EHOSTUNREACH;
 		}
 
-		/* Exclusive direct xmit for tunnel mode, as
-		 * some filtering or matching rules may apply
-		 * in transport mode.
-		 * Locally generated packets also require
-		 * the normal XFRM path for L2 header setup,
-		 * as the hardware needs the L2 header to match
-		 * for encryption, so skip direct output as well.
+		/* Work around packet-offload skb handling mismatch by
+		 * dropping packets marked with this internal sentinel.
 		 */
-		if (x->props.mode == XFRM_MODE_TUNNEL && !skb->sk)
-			return xfrm_dev_direct_output(sk, x, skb);
+		if (skb->inner_protocol == IPPROTO_RSVP) {
+			XFRM_INC_STATS(net, LINUX_MIB_XFRMOUTERROR);
+			kfree_skb(skb);
+			return -EHOSTUNREACH;
+		}
 
-		return xfrm_output_resume(sk, skb, 0);
+		return 0;
 	}
 
 	secpath_reset(skb);
