@@ -31,6 +31,7 @@
 #define MTK_QDMA_PAGE_SIZE	2048
 #define MTK_MAX_RX_LENGTH	1536
 #define MTK_MAX_RX_LENGTH_2K	2048
+#define MTK_MAX_RX_LENGTH_9K	9216
 #define MTK_TX_DMA_BUF_LEN	0x3fff
 #define MTK_TX_DMA_BUF_LEN_V2	0xffff
 #define MTK_QDMA_RING_SIZE	2048
@@ -606,6 +607,10 @@
 #define XMAC_FORCE_TX_FC	BIT(4)
 #define XMAC_FORCE_LINK		BIT(0)
 
+/* XFI Mac RX configuration 2 registers */
+#define MTK_XMAC_RX_CFG2(x)	(MTK_XMAC_MCR(x) + 0xd0)
+#define MTK_XMAC_MAX_RX_MASK	GENMASK(13, 0)
+
 /* XFI Mac count global control */
 #define MTK_XMAC_CNT_CTRL(x)	(MTK_XMAC_BASE(x) + 0x100)
 #define XMAC_GLB_CNTCLR		BIT(0)
@@ -1118,6 +1123,7 @@ enum mkt_eth_capabilities {
 	MTK_SRAM_BIT,
 	MTK_XGMAC_BIT,
 	MTK_XGMAC_V2_BIT,
+	MTK_NETSYS_RX_9K_BIT,
 	MTK_36BIT_DMA_BIT,
 
 	/* MUX BITS*/
@@ -1169,6 +1175,7 @@ enum mkt_eth_capabilities {
 #define MTK_SRAM		BIT_ULL(MTK_SRAM_BIT)
 #define MTK_XGMAC		BIT_ULL(MTK_XGMAC_BIT)
 #define MTK_XGMAC_V2		BIT_ULL(MTK_XGMAC_V2_BIT)
+#define MTK_NETSYS_RX_9K	BIT_ULL(MTK_NETSYS_RX_9K_BIT)
 #define MTK_36BIT_DMA	BIT_ULL(MTK_36BIT_DMA_BIT)
 
 #define MTK_ETH_MUX_GDM1_TO_GMAC1_ESW		\
@@ -1290,7 +1297,7 @@ enum mkt_eth_capabilities {
 		      MTK_MUX_GMAC123_TO_GEPHY_SGMII | \
 		      MTK_MUX_GMAC123_TO_USXGMII | MTK_MUX_GMAC2_TO_2P5GPHY | \
 		      MTK_QDMA | MTK_RSTCTRL_PPE1 | MTK_RSTCTRL_PPE2 | MTK_SRAM | \
-		      MTK_PDMA_INT | MTK_RSS | MTK_HWLRO)
+		      MTK_PDMA_INT | MTK_RSS | MTK_HWLRO | MTK_NETSYS_RX_9K)
 
 struct mtk_tx_dma_desc_info {
 	dma_addr_t	addr;
