@@ -4631,7 +4631,7 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 	qos = sta->sta.wme;
 
 	chanctx_conf = rcu_dereference(sdata->vif.bss_conf.chanctx_conf);
-	if (WARN_ON(!chanctx_conf)) {
+	if (!chanctx_conf) {
 		ret = -EINVAL;
 		goto unlock;
 	}

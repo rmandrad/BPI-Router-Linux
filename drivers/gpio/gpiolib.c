@@ -467,6 +467,9 @@ int gpiod_get_direction(struct gpio_desc *desc)
 	    test_bit(GPIOD_FLAG_IS_OUT, &flags))
 		return 0;
 
+	if (!guard.gc->get_direction)
+		return -EOPNOTSUPP;
+
 	ret = gpiochip_get_direction(guard.gc, offset);
 	if (ret < 0)
 		return ret;
