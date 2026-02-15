@@ -1633,6 +1633,7 @@ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
 	}
 
 	data |= TX_DMA_SWC_V2 | QID_BITS_V2(info->qid);
+	data |= FIELD_PREP(TX_DMA_TPORT_MASK, info->tport);
 	WRITE_ONCE(desc->txd4, data);
 
 	data = 0;
@@ -1653,7 +1654,10 @@ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
 	WRITE_ONCE(desc->txd6, data);
 
 	WRITE_ONCE(desc->txd7, 0);
-	WRITE_ONCE(desc->txd8, 0);
+	data = 0;
+	data |= FIELD_PREP(TX_DMA_TOPS_ENTRY_MASK, info->tops_entry);
+	data |= FIELD_PREP(TX_DMA_CDRT_MASK, info->cdrt);
+	WRITE_ONCE(desc->txd8, data);
 }
 
 static void mtk_tx_set_dma_desc(struct net_device *dev, void *txd,
@@ -1674,7 +1678,10 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 	struct mtk_tx_dma_desc_info txd_info = {
 		.size = skb_headlen(skb),
 		.gso = gso,
-		.csum = skb->ip_summed == CHECKSUM_PARTIAL,
+		.cdrt = 0,
+		.tport = 0,
+		.tops_entry = 0,
+		.csum = skb->ip_summed == CHECKSUM_PARTIAL || gso,
 		.vlan = skb_vlan_tag_present(skb),
 		.qid = skb_get_queue_mapping(skb),
 		.vlan_tci = skb_vlan_tag_get(skb),
@@ -1691,6 +1698,13 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 	int i, n_desc = 1;
 	int queue = skb_get_queue_mapping(skb);
 	int k = 0;
+
+	if (mtk_is_netsys_v3_or_greater(eth) &&
+	    unlikely(skb->inner_protocol == IPPROTO_ESP &&
+		     skb_tnl_cdrt(skb) && is_tnl_tag_valid(skb))) {
+		txd_info.cdrt = skb_tnl_cdrt(skb);
+		txd_info.tport = TPORT_EIP197_QDMA;
+	}
 
 	txq = netdev_get_tx_queue(dev, queue);
 	itxd = ring->next_free;
@@ -1737,15 +1751,23 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 				new_desc = false;
 			}
 
-			memset(&txd_info, 0, sizeof(struct mtk_tx_dma_desc_info));
-			txd_info.size = min_t(unsigned int, frag_size,
-					      soc->tx.dma_max_len);
-			txd_info.qid = queue;
-			txd_info.last = i == skb_shinfo(skb)->nr_frags - 1 &&
-					!(frag_size - txd_info.size);
-			txd_info.addr = skb_frag_dma_map(eth->dma_dev, frag,
-							 offset, txd_info.size,
-							 DMA_TO_DEVICE);
+				memset(&txd_info, 0, sizeof(struct mtk_tx_dma_desc_info));
+				txd_info.size = min_t(unsigned int, frag_size,
+						      soc->tx.dma_max_len);
+				txd_info.qid = queue;
+
+				if (mtk_is_netsys_v3_or_greater(eth) &&
+				    unlikely(skb->inner_protocol == IPPROTO_ESP &&
+					     skb_tnl_cdrt(skb) && is_tnl_tag_valid(skb))) {
+					txd_info.cdrt = skb_tnl_cdrt(skb);
+					txd_info.tport = TPORT_EIP197_QDMA;
+				}
+
+				txd_info.last = i == skb_shinfo(skb)->nr_frags - 1 &&
+						!(frag_size - txd_info.size);
+				txd_info.addr = skb_frag_dma_map(eth->dma_dev, frag,
+								 offset, txd_info.size,
+								 DMA_TO_DEVICE);
 			if (unlikely(dma_mapping_error(eth->dma_dev, txd_info.addr)))
 				goto err_dma;
 

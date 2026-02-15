@@ -22,6 +22,7 @@
 #include <net/page_pool/types.h>
 #include <linux/bpf_trace.h>
 #include "mtk_ppe.h"
+#include "mtk_tnl.h"
 
 #define MTK_MAX_DSA_PORTS	7
 #define MTK_DSA_PORT_MASK	GENMASK(2, 0)
@@ -355,6 +356,10 @@
 
 #define MTK_TX_DMA_BUF_SHIFT	8
 
+/* QDMA V2 descriptor txd8 */
+#define TX_DMA_CDRT_MASK	GENMASK(7, 0)
+#define TX_DMA_TOPS_ENTRY_MASK	GENMASK(13, 8)
+
 /* QDMA V2 descriptor txd6 */
 #define TX_DMA_INS_VLAN_V2	BIT(16)
 /* QDMA V2 descriptor txd5 */
@@ -364,6 +369,10 @@
 #define TX_DMA_SPTAG_V3         BIT(27)
 
 /* QDMA V2 descriptor txd4 */
+#define TPORT_QDMA		1
+#define TPORT_EIP197		2
+#define TPORT_EIP197_QDMA	3
+#define TX_DMA_TPORT_MASK	GENMASK(3, 0)
 #define TX_DMA_FPORT_SHIFT_V2	8
 #define TX_DMA_FPORT_MASK_V2	0xf
 #define TX_DMA_SWC_V2		BIT(30)
@@ -438,6 +447,10 @@
 /* PDMA V2 descriptor rxd3 */
 #define RX_DMA_VTAG_V2		BIT(0)
 #define RX_DMA_L4_VALID_V2	BIT(2)
+#define RX_DMA_GET_TOPS_CRSN(x)	(((x) >> 24) & 0xff)
+
+/* PDMA V2 descriptor rxd7 */
+#define RX_DMA_GET_CDRT(x)	(((x) >> 8) & 0xff)
 
 #define MTK_TDMA_GLO_CFG	0x6204
 
@@ -1284,6 +1297,9 @@ struct mtk_tx_dma_desc_info {
 	u32		size;
 	u16		vlan_tci;
 	u16		qid;
+	u8		cdrt;
+	u8		tport;
+	u8		tops_entry;
 	u8		gso:1;
 	u8		csum:1;
 	u8		vlan:1;
