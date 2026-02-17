@@ -84,7 +84,7 @@
 #define MTK_RSS_MAX_INDIRECTION_TABLE	128
 
 /* Frame Engine Global Configuration */
-#define MTK_FE_GLO_CFG(x)	(((x) > 8) ? 0x24 : 0x00)
+#define MTK_FE_GLO_CFG(x)	(((x) >= 8) ? 0x24 : 0x00)
 #define MTK_FE_LINK_DOWN_P(x)	BIT(((x) + 8) % 16)
 
 /* Frame Engine Global Reset Register */
@@ -1696,10 +1696,22 @@ struct mtk_eth {
 	struct {
 		struct delayed_work monitor_work;
 		atomic_t force;
-		u32 wdidx;
-		u8 wdma_hang_count;
+		u32 wdidx[3];
+		u32 adidx[4];
+		u32 gdm_txgp_cnt[3];
+		u32 gdm_rxgp_cnt[3];
+		u32 gdm_rxfc_cnt[3];
+		u16 gdm_oq_cnt[3];
+		u32 gdm_txfsm[3];
+		u32 gdm_rxfsm[3];
+		u32 cdma_rxfsm;
+		u8 wdma_hang_count[3];
 		u8 qdma_hang_count;
 		u8 adma_hang_count;
+		u8 mac_tx_hang_count[3];
+		u8 mac_rx_hang_count[3];
+		u8 gdm_tx_hang_count[3];
+		u8 gdm_rx_hang_count[3];
 		u8 tdma_rx_hang_count;
 		u8 tdma_tx_hang_count;
 		u32 pre_ipq10;
@@ -1758,7 +1770,7 @@ struct mtk_mux {
 	struct mtk_mac			*mac;
 	struct phylink			*initial_phylink;
 	unsigned int			channel;
-	unsigned int			sfp_present_channel;
+	unsigned int			sfp_connected_channel;
 };
 
 /* the struct describing the SoC. these are declared in the soc_xyz.c files */

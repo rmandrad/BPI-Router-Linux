@@ -4307,10 +4307,19 @@ static bool mtk_phy_should_powerdown(struct mtk_eth *eth)
 	 * if the MAC will be reset.
 	 */
 	for (i = 0; i < 3; i++) {
-		if (eth->reset.tdma_tx_hang_count > 2 ||
-		    eth->reset.tdma_rx_hang_count > 2)
+		if (eth->reset.wdma_hang_count[i] > 2 ||
+		    eth->reset.mac_tx_hang_count[i] > 2 ||
+		    eth->reset.mac_rx_hang_count[i] > 2 ||
+		    eth->reset.gdm_tx_hang_count[i] > 2 ||
+		    eth->reset.gdm_rx_hang_count[i] > 2)
 			return true;
 	}
+
+	if (eth->reset.qdma_hang_count > 2 ||
+	    eth->reset.adma_hang_count > 2 ||
+	    eth->reset.tdma_tx_hang_count > 2 ||
+	    eth->reset.tdma_rx_hang_count > 2)
+		return true;
 
 	return false;
 }
@@ -4905,126 +4914,247 @@ static void mtk_hw_warm_reset(struct mtk_eth *eth)
 			val, rst_mask);
 }
 
+static inline u16 mtk_get_iq_sta(struct mtk_eth *eth, int port)
+{
+	const struct mtk_reg_map *reg_map = eth->soc->reg_map;
+	u32 offset, shift, mask;
+
+	if (mtk_is_netsys_v2_or_greater(eth)) {
+		offset = ((port >> 1) << 2);
+		shift = 16 * (port & 0x1);
+		mask = 0x0fff;
+	} else {
+		offset = ((port >> 2) << 2);
+		shift = 8 * (port & 0x3);
+		mask = 0x00ff;
+	}
+
+	return (mtk_r32(eth, reg_map->pse_iq_sta + offset) >> shift) & mask;
+}
+
+static inline u16 mtk_get_oq_sta(struct mtk_eth *eth, int port)
+{
+	const struct mtk_reg_map *reg_map = eth->soc->reg_map;
+	u32 offset, shift, mask;
+
+	if (mtk_is_netsys_v2_or_greater(eth)) {
+		offset = ((port >> 1) << 2);
+		shift = 16 * (port & 0x1);
+		mask = 0x0fff;
+	} else {
+		offset = ((port >> 2) << 2);
+		shift = 8 * (port & 0x3);
+		mask = 0x00ff;
+	}
+
+	return (mtk_r32(eth, reg_map->pse_oq_sta + offset) >> shift) & mask;
+}
+
 static bool mtk_hw_check_dma_hang(struct mtk_eth *eth)
 {
 	const struct mtk_reg_map *reg_map = eth->soc->reg_map;
-	bool gmac1_tx, gmac2_tx, gmac3_tx = false, gdm1_tx, gdm2_tx, gdm3_tx = false;
-	bool oq_hang, cdm1_busy, adma_busy;
-	bool wtx_busy, cdm_full, oq_free;
-	u32 wdidx, val, gdm1_fc, gdm2_fc, gdm3_fc;
-	u32 tdma_glo_cfg, cur_fsm, ipq10;
-	bool rx_busy, tx_busy, cur_fsm_tx, cur_fsm_rx;
-
-	bool qfsm_hang, qfwd_hang;
+	struct mtk_hw_stats *hw_stats;
+	bool gmac_tx, gmac_rx;
+	bool iq_hang, oq_hang, adma_hang = true;
+	bool wtx_busy, cdm_busy, oq_free;
+	u32 adidx, wdidx, val;
+	u32 cdma_rxfsm, gdm_txfsm, gdm_rxfsm;
+	u32 txgp_cnt, rxgp_cnt, rxfc_cnt;
+	u16 oq_sta;
+	bool qfsm_hang, qfwd_hang, qpse_fc;
 	bool ret = false;
+	int i;
 
 	if (MTK_HAS_CAPS(eth->soc->caps, MTK_SOC_MT7628))
 		return false;
 
 	/* WDMA sanity checks */
-	wdidx = mtk_r32(eth, reg_map->wdma_base[0] + 0xc);
+	for (i = 0; i < 3; i++) {
+		if (!mtk_r32(eth, reg_map->wdma_base[i] + 0xc))
+			continue;
 
-	val = mtk_r32(eth, reg_map->wdma_base[0] + 0x204);
-	wtx_busy = FIELD_GET(MTK_TX_DMA_BUSY, val);
+		wdidx = mtk_r32(eth, reg_map->wdma_base[i] + 0xc);
+		val = mtk_r32(eth, reg_map->wdma_base[i] + 0x204);
+		wtx_busy = FIELD_GET(MTK_TX_DMA_BUSY, val);
 
-	val = mtk_r32(eth, reg_map->wdma_base[0] + 0x230);
-	cdm_full = !FIELD_GET(MTK_CDM_TXFIFO_RDY, val);
+		val = mtk_r32(eth, MTK_FE_CDMW_FSM(i));
+		cdm_busy = !!FIELD_GET(GENMASK(12, 0), val);
 
-	oq_free  = (!(mtk_r32(eth, reg_map->pse_oq_sta) & GENMASK(24, 16)) &&
-		    !(mtk_r32(eth, reg_map->pse_oq_sta + 0x4) & GENMASK(8, 0)) &&
-		    !(mtk_r32(eth, reg_map->pse_oq_sta + 0x10) & GENMASK(24, 16)));
+		oq_free = (!mtk_get_oq_sta(eth, PSE_GDM1_PORT) &&
+			   !mtk_get_oq_sta(eth, PSE_GDM2_PORT) &&
+			   !mtk_get_oq_sta(eth, PSE_GDM3_PORT) &&
+			   !mtk_get_oq_sta(eth, PSE_WDMA0_PORT) &&
+			   !mtk_get_oq_sta(eth, PSE_WDMA1_PORT) &&
+			   !mtk_get_oq_sta(eth, PSE_WDMA2_PORT));
 
-	if (wdidx == eth->reset.wdidx && wtx_busy && cdm_full && oq_free) {
-		if (++eth->reset.wdma_hang_count > 2) {
-			eth->reset.wdma_hang_count = 0;
-			ret = true;
+		if (wdidx == eth->reset.wdidx[i] &&
+		    wtx_busy && cdm_busy && oq_free) {
+			if (++eth->reset.wdma_hang_count[i] > 2) {
+				dev_warn(eth->dev, "detect WDMA%d Tx hang!\n", i);
+				eth->reset.wdma_hang_count[i] = 0;
+				ret = true;
+			}
+			eth->reset.wdidx[i] = wdidx;
+			goto out;
 		}
-		goto out;
+
+		eth->reset.wdma_hang_count[i] = 0;
+		eth->reset.wdidx[i] = wdidx;
 	}
 
 	/* QDMA sanity checks */
-	qfsm_hang = !!mtk_r32(eth, reg_map->qdma.qtx_cfg + 0x234);
+	val = mtk_r32(eth, reg_map->qdma.qtx_cfg + 0x234);
+	qfsm_hang = !!FIELD_GET(GENMASK(12, 8), val);
 	qfwd_hang = !mtk_r32(eth, reg_map->qdma.qtx_cfg + 0x308);
 
-	gdm1_tx = FIELD_GET(GENMASK(31, 16), mtk_r32(eth, MTK_FE_GDM1_FSM)) > 0;
-	gdm2_tx = FIELD_GET(GENMASK(31, 16), mtk_r32(eth, MTK_FE_GDM2_FSM)) > 0;
-	gmac1_tx = FIELD_GET(GENMASK(31, 24), mtk_r32(eth, MTK_MAC_FSM(0))) != 1;
-	gmac2_tx = FIELD_GET(GENMASK(31, 24), mtk_r32(eth, MTK_MAC_FSM(1))) != 1;
-	gdm1_fc = mtk_r32(eth, reg_map->gdm1_cnt + MTK_GDM_RX_FC_OFFSET(eth, 0));
-	gdm2_fc = mtk_r32(eth, reg_map->gdm1_cnt + MTK_GDM_RX_FC_OFFSET(eth, 1));
+	val = mtk_r32(eth, MTK_FE_INT_STATUS);
+	qpse_fc = !!FIELD_GET(BIT(PSE_QDMA_TX_PORT), val);
+	if (qpse_fc)
+		mtk_w32(eth, BIT(PSE_QDMA_TX_PORT), MTK_FE_INT_STATUS);
 
-	if (mtk_is_netsys_v3_or_greater(eth)) {
-		gdm3_tx = FIELD_GET(GENMASK(31, 16), mtk_r32(eth, MTK_FE_GDM3_FSM)) > 0;
-		gmac3_tx = FIELD_GET(GENMASK(31, 24), mtk_r32(eth, MTK_MAC_FSM(2))) != 1;
-		gdm3_fc = mtk_r32(eth, reg_map->gdm1_cnt + MTK_GDM_RX_FC_OFFSET(eth, 2));
-	}
-
-	if (qfsm_hang && qfwd_hang &&
-	    ((gdm1_tx && gmac1_tx && gdm1_fc < 1) ||
-	     (gdm2_tx && gmac2_tx && gdm2_fc < 1) ||
-	     (mtk_is_netsys_v3_or_greater(eth) && gdm3_tx && gmac3_tx && gdm3_fc < 1))) {
+	if (!qpse_fc && qfsm_hang && qfwd_hang) {
 		if (++eth->reset.qdma_hang_count > 2) {
+			dev_warn(eth->dev, "detect QDMA Tx hang !\n");
 			eth->reset.qdma_hang_count = 0;
 			ret = true;
 		}
 		goto out;
 	}
 
-	/* ADMA sanity checks */
-	oq_hang = !!(mtk_r32(eth, reg_map->pse_oq_sta) & GENMASK(8, 0));
-	cdm1_busy = !!(mtk_r32(eth, MTK_FE_CDM1_FSM) & GENMASK(31, 16));
-	adma_busy = !(mtk_r32(eth, reg_map->pdma.adma_rx_dbg0) & GENMASK(4, 0)) &&
-		    !(mtk_r32(eth, reg_map->pdma.adma_rx_dbg0) & BIT(6));
+	mtk_stats_update(eth);
 
-	if (oq_hang && cdm1_busy && adma_busy) {
+	/* GDM sanity checks */
+	for (i = 0; i < 3; i++) {
+		if (!eth->netdev[i] || !netif_running(eth->netdev[i]))
+			continue;
+
+		hw_stats = eth->mac[i]->hw_stats;
+		txgp_cnt = hw_stats->tx_packets;
+		rxgp_cnt = hw_stats->rx_packets;
+		rxfc_cnt = hw_stats->rx_flow_control_packets;
+
+		iq_hang = !!mtk_get_iq_sta(eth, PSE_GDM_PORT(i));
+		oq_sta = mtk_get_oq_sta(eth, PSE_GDM_PORT(i));
+		oq_hang = !!oq_sta;
+
+		if (mtk_interface_mode_is_xgmii(eth, eth->mac[i]->interface))
+			goto skip_gmac;
+
+		/* GMAC Tx */
+		gmac_tx = FIELD_GET(GENMASK(31, 24),
+				    mtk_r32(eth, MTK_MAC_FSM(i))) != 1;
+		if (oq_hang && gmac_tx &&
+		    txgp_cnt == eth->reset.gdm_txgp_cnt[i] &&
+		    rxfc_cnt == eth->reset.gdm_rxfc_cnt[i]) {
+			if (++eth->reset.mac_tx_hang_count[i] > 2) {
+				dev_warn(eth->dev, "detect GMAC%d Tx hang!\n", i + 1);
+				eth->reset.mac_tx_hang_count[i] = 0;
+				ret = true;
+			}
+			eth->reset.gdm_txgp_cnt[i] = txgp_cnt;
+			eth->reset.gdm_oq_cnt[i] = oq_sta;
+			goto out;
+		}
+
+		eth->reset.mac_tx_hang_count[i] = 0;
+		eth->reset.gdm_txgp_cnt[i] = txgp_cnt;
+
+		/* GMAC Rx */
+		gmac_rx = FIELD_GET(GENMASK(23, 16),
+				    mtk_r32(eth, MTK_MAC_FSM(i))) != 1;
+		if (gmac_rx && rxgp_cnt == eth->reset.gdm_rxgp_cnt[i]) {
+			if (++eth->reset.mac_rx_hang_count[i] > 2) {
+				dev_warn(eth->dev, "detect GMAC%d Rx hang!\n", i + 1);
+				eth->reset.mac_rx_hang_count[i] = 0;
+				ret = true;
+			}
+			eth->reset.gdm_rxgp_cnt[i] = rxgp_cnt;
+			eth->reset.gdm_oq_cnt[i] = oq_sta;
+			goto out;
+		}
+
+		eth->reset.mac_rx_hang_count[i] = 0;
+		eth->reset.gdm_rxgp_cnt[i] = rxgp_cnt;
+
+skip_gmac:
+		/* GDM Tx */
+		gdm_txfsm = FIELD_GET(GENMASK(28, 16),
+				      mtk_r32(eth, MTK_FE_GDM_FSM(i)));
+		if (oq_hang && txgp_cnt == eth->reset.gdm_txgp_cnt[i] &&
+		    rxfc_cnt == eth->reset.gdm_rxfc_cnt[i] &&
+		    oq_sta == eth->reset.gdm_oq_cnt[i] &&
+		    gdm_txfsm == eth->reset.gdm_txfsm[i] &&
+		    gdm_txfsm == 0x1033) {
+			if (++eth->reset.gdm_tx_hang_count[i] > 2) {
+				dev_warn(eth->dev, "detect GDM%d Tx hang!\n", i + 1);
+				eth->reset.gdm_tx_hang_count[i] = 0;
+				ret = true;
+			}
+			eth->reset.gdm_txfsm[i] = gdm_txfsm;
+			eth->reset.gdm_txgp_cnt[i] = txgp_cnt;
+			eth->reset.gdm_rxfc_cnt[i] = rxfc_cnt;
+			eth->reset.gdm_oq_cnt[i] = oq_sta;
+			goto out;
+		}
+
+		eth->reset.gdm_tx_hang_count[i] = 0;
+		eth->reset.gdm_txfsm[i] = gdm_txfsm;
+		eth->reset.gdm_txgp_cnt[i] = txgp_cnt;
+		eth->reset.gdm_rxfc_cnt[i] = rxfc_cnt;
+		eth->reset.gdm_oq_cnt[i] = oq_sta;
+
+		if (!mtk_interface_mode_is_xgmii(eth, eth->mac[i]->interface))
+			continue;
+
+		/* GDM Rx */
+		gdm_rxfsm = FIELD_GET(GENMASK(7, 0),
+				      mtk_r32(eth, MTK_FE_GDM_FSM(i)));
+		if (iq_hang && rxgp_cnt == eth->reset.gdm_rxgp_cnt[i] &&
+		    gdm_rxfsm == eth->reset.gdm_rxfsm[i] &&
+		    (gdm_rxfsm == 0x23 || gdm_rxfsm == 0x24)) {
+			if (++eth->reset.gdm_rx_hang_count[i] > 2) {
+				dev_warn(eth->dev, "detect GDM%d Rx hang!\n", i + 1);
+				eth->reset.gdm_rx_hang_count[i] = 0;
+				ret = true;
+			}
+			eth->reset.gdm_rxfsm[i] = gdm_rxfsm;
+			eth->reset.gdm_rxgp_cnt[i] = rxgp_cnt;
+			goto out;
+		}
+
+		eth->reset.gdm_rx_hang_count[i] = 0;
+		eth->reset.gdm_rxfsm[i] = gdm_rxfsm;
+		eth->reset.gdm_rxgp_cnt[i] = rxgp_cnt;
+	}
+
+	/* ADMA sanity checks */
+	for (i = 0; i < 4; i++) {
+		if (!mtk_r32(eth, reg_map->pdma.rx_ptr + i * 0x100))
+			continue;
+
+		adidx = mtk_r32(eth, reg_map->pdma.rx_ptr + i * 0x100 + 0xc);
+		if (adidx != eth->reset.adidx[i])
+			adma_hang = false;
+
+		eth->reset.adidx[i] = adidx;
+	}
+
+	oq_hang = !!mtk_get_oq_sta(eth, PSE_ADMA_PORT);
+	cdma_rxfsm = FIELD_GET(GENMASK(27, 16), mtk_r32(eth, MTK_FE_CDM1_FSM));
+	if (oq_hang && adma_hang &&
+	    cdma_rxfsm != 0 && cdma_rxfsm != eth->reset.cdma_rxfsm) {
 		if (++eth->reset.adma_hang_count > 2) {
+			dev_warn(eth->dev, "detect ADMA Rx hang!\n");
 			eth->reset.adma_hang_count = 0;
 			ret = true;
 		}
 		goto out;
 	}
+	eth->reset.cdma_rxfsm = cdma_rxfsm;
 
-	if (mtk_is_netsys_v3_or_greater(eth)) {
-		ipq10 = mtk_r32(eth, reg_map->pse_iq_sta + 24) & GENMASK(23, 0);
-		cur_fsm = mtk_r32(eth, MTK_FE_CDM6_FSM);
-		tdma_glo_cfg = mtk_r32(eth, MTK_TDMA_GLO_CFG);
-		cur_fsm_rx = !(cur_fsm & GENMASK(27, 16));
-		cur_fsm_tx = !(cur_fsm & GENMASK(24, 0));
-		tx_busy = !(tdma_glo_cfg & BIT(1));
-		rx_busy = !(tdma_glo_cfg & BIT(3));
-
-		if (ipq10 && cur_fsm_tx && tx_busy &&
-		    cur_fsm_tx == !!(eth->reset.pre_fsm  & GENMASK(24, 0)) &&
-		    ipq10 == eth->reset.pre_ipq10) {
-			if (++eth->reset.tdma_tx_hang_count > 2) {
-				eth->reset.tdma_tx_hang_count = 0;
-				ret = true;
-			}
-			goto out;
-		}
-
-		if (cur_fsm_rx && rx_busy &&
-		    cur_fsm_rx == (eth->reset.pre_fsm & GENMASK(27, 16))) {
-			if (++eth->reset.tdma_rx_hang_count > 2) {
-				eth->reset.tdma_rx_hang_count = 0;
-				ret = true;
-			}
-			goto out;
-		}
-	}
-
-	eth->reset.wdma_hang_count = 0;
 	eth->reset.qdma_hang_count = 0;
 	eth->reset.adma_hang_count = 0;
-	eth->reset.tdma_tx_hang_count = 0;
-	eth->reset.tdma_rx_hang_count = 0;
 out:
-	eth->reset.wdidx = wdidx;
-
-	if (mtk_is_netsys_v3_or_greater(eth)) {
-		eth->reset.pre_fsm = cur_fsm;
-		eth->reset.pre_ipq10 = ipq10;
-	}
 	return ret;
 }
 
@@ -6027,26 +6157,27 @@ static void mux_poll(struct work_struct *work)
 	struct net_device *dev = eth->netdev[mac->id];
 	unsigned int new_channel;
 	struct phylink *old_pl;
-	int sfp_present;
+	int sfp_connected;
 	int err;
-	bool running;
 	bool transitional_old_pl;
+	bool running;
 
 	//dev_info(eth->dev, "ethernet mux: %s:%d\n",__func__,__LINE__);
 	if (IS_ERR(mux->mod_def0_gpio) || IS_ERR(mux->chan_sel_gpio))
 		goto reschedule;
 
-	sfp_present = gpiod_get_value_cansleep(mux->mod_def0_gpio);
-	if (sfp_present < 0)
+	sfp_connected = gpiod_get_value_cansleep(mux->mod_def0_gpio);
+	if (sfp_connected < 0)
 		goto reschedule;
-	new_channel = sfp_present ? mux->sfp_present_channel : !mux->sfp_present_channel;
+	new_channel = sfp_connected ? mux->sfp_connected_channel :
+				      !mux->sfp_connected_channel;
 
 	if (mux->channel == new_channel)
 		goto reschedule;
-
 	running = netif_running(dev);
 
-	dev_info(eth->dev, "ethernet mux: line:%d new channel:%d,sfp:%d\n",__LINE__, new_channel,sfp_present);
+	dev_info(eth->dev, "ethernet mux: line:%d new channel:%d,sfp:%d\n",
+		 __LINE__, new_channel, sfp_connected);
 
 	if (mux->data[mux->channel] && mux->data[mux->channel]->phylink)
 		old_pl = mux->data[mux->channel]->phylink;
@@ -6202,7 +6333,7 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 	struct mtk_mux *mux;
 	unsigned int id;
 	unsigned int initial_channel;
-	int err, sfp_present;
+	int err, sfp_connected;
 
 	if (!_id) {
 		dev_err(eth->dev, "missing attach mac id\n");
@@ -6244,11 +6375,13 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 		goto err_put_mod_def0;
 	}
 
-	if (of_property_read_u32(np, "sfp-present-channel",
-				 &mux->sfp_present_channel))
-		mux->sfp_present_channel = 0;
-	else if (mux->sfp_present_channel > 1)
-		mux->sfp_present_channel = 1;
+	if (of_property_read_u32(np, "sfp-connected-channel",
+				 &mux->sfp_connected_channel) &&
+	    of_property_read_u32(np, "sfp-present-channel",
+				 &mux->sfp_connected_channel))
+		mux->sfp_connected_channel = 0;
+	else if (mux->sfp_connected_channel > 1)
+		mux->sfp_connected_channel = 1;
 
 	for_each_child_of_node(np, child) {
 		err = mtk_add_mux_channel(mux, child);
@@ -6257,20 +6390,22 @@ static int mtk_add_mux(struct mtk_eth *eth, struct device_node *np)
 			of_node_put(child);
 			goto err_put_chan_sel;
 		}
-		//should set initial mux->channel be set if ! mux->sfp_present_channel?
 	}
 
-	/* Configure initial mux channel based on current module presence. */
-	sfp_present = gpiod_get_value_cansleep(mux->mod_def0_gpio);
-	if (sfp_present < 0) {
-		dev_warn(eth->dev, "failed to read mod-def0 gpio, defaulting to non-SFP channel\n");
-		initial_channel = !mux->sfp_present_channel;
+	/* Configure initial mux path from current SFP module presence.
+	 * If GPIO read fails, keep the non-SFP path as fallback.
+	 */
+	sfp_connected = gpiod_get_value_cansleep(mux->mod_def0_gpio);
+	if (sfp_connected < 0) {
+		dev_warn(eth->dev,
+			 "ethernet mux: failed to read mod-def0, defaulting to non-SFP channel\n");
+		initial_channel = !mux->sfp_connected_channel;
 	} else {
-		initial_channel = sfp_present ? mux->sfp_present_channel :
-						!mux->sfp_present_channel;
+		initial_channel = sfp_connected ? mux->sfp_connected_channel :
+					      !mux->sfp_connected_channel;
 	}
 	gpiod_set_value_cansleep(mux->chan_sel_gpio, initial_channel);
-	/* Force first poll pass to (re)build phylink for selected channel. */
+	/* Force the first poll pass to rebuild phylink for the selected path. */
 	mux->channel = !initial_channel;
 
 	dev_info(eth->dev, "ethernet mux: line:%d added new mux\n",__LINE__);
@@ -6926,9 +7061,8 @@ static int mtk_probe(struct platform_device *pdev)
 			err = mtk_add_mux(eth, child);
 			if (err)
 				dev_err(&pdev->dev, "failed to add mux\n");
-
-			of_node_put(mux_np);
-		};
+		}
+		of_node_put(mux_np);
 	}
 
 	if (eth->soc->offload_version) {
