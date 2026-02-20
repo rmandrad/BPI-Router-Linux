@@ -16,7 +16,6 @@
 #include <linux/spinlock.h>
 #include <net/dst.h>
 #include <net/gso.h>
-#include <net/ip.h>
 #include <net/xfrm.h>
 #include <linux/notifier.h>
 
@@ -429,14 +428,6 @@ bool xfrm_dev_offload_ok(struct sk_buff *skb, struct xfrm_state *x)
 
 		if (skb_is_gso(skb) && skb_gso_validate_network_len(skb, mtu))
 			goto ok;
-	}
-
-	if (x->props.family == AF_INET && x->xso.type == XFRM_DEV_OFFLOAD_PACKET) {
-		skb_gso_reset(skb);
-		IPCB(skb)->frag_max_size = mtu;
-		if (!ip_do_fragment(dev_net(skb_dst(skb)->dev), skb->sk, skb,
-				    xfrm4_output))
-			return true;
 	}
 
 	return false;

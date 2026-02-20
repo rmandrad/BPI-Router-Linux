@@ -634,8 +634,6 @@ static netdev_features_t vlan_dev_fix_features(struct net_device *dev,
 		lower_features |= NETIF_F_HW_CSUM;
 	features = netdev_intersect_features(features, lower_features);
 	features |= old_features & (NETIF_F_SOFT_FEATURES | NETIF_F_GSO_SOFTWARE);
-	if (old_features & NETIF_F_HW_ESP)
-		features |= NETIF_F_HW_ESP;
 
 	return features;
 }
