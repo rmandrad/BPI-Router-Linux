@@ -167,7 +167,7 @@ mtk_flow_mangle_ipv4(const struct flow_action_entry *act,
 }
 
 static int
-mtk_flow_get_dsa_port(struct net_device **dev)
+mtk_flow_get_dsa_port(struct net_device **dev, int *proto)
 {
 #if IS_ENABLED(CONFIG_NET_DSA)
 	struct dsa_port *dp;
@@ -176,10 +176,14 @@ mtk_flow_get_dsa_port(struct net_device **dev)
 	if (IS_ERR(dp))
 		return -ENODEV;
 
-	if (dp->cpu_dp->tag_ops->proto != DSA_TAG_PROTO_MTK)
+	if (dp->cpu_dp->tag_ops->proto != DSA_TAG_PROTO_MTK &&
+	    dp->cpu_dp->tag_ops->proto != DSA_TAG_PROTO_MXL862_8021Q)
 		return -ENODEV;
 
 	*dev = dsa_port_to_conduit(dp);
+
+	if (proto)
+		*proto = dp->cpu_dp->tag_ops->proto;
 
 	return dp->index;
 #else
@@ -193,7 +197,7 @@ mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 			   int *wed_index)
 {
 	struct mtk_wdma_info info = {};
-	int pse_port, dsa_port, queue;
+	int pse_port, dsa_port, dsa_proto, queue;
 
 	if (mtk_flow_get_wdma_info(dev, dest_mac, &info) == 0) {
 		mtk_foe_entry_set_wdma(eth, foe, info.wdma_idx, info.queue,
@@ -219,7 +223,7 @@ mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 		goto out;
 	}
 
-	dsa_port = mtk_flow_get_dsa_port(&dev);
+	dsa_port = mtk_flow_get_dsa_port(&dev, &dsa_proto);
 
 	if (dev == eth->netdev[0])
 		pse_port = PSE_GDM1_PORT;
@@ -231,7 +235,7 @@ mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 		return -EOPNOTSUPP;
 
 	if (dsa_port >= 0) {
-		mtk_foe_entry_set_dsa(eth, foe, dsa_port);
+		mtk_foe_entry_set_dsa(eth, foe, dsa_proto, dsa_port);
 		queue = 3 + dsa_port;
 	} else {
 		queue = pse_port - 1;
@@ -270,6 +274,7 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 		flow_rule_match_meta(rule, &match);
 		if (mtk_is_netsys_v2_or_greater(eth)) {
 			idev = __dev_get_by_index(&init_net, match.key->ingress_ifindex);
+			mtk_flow_get_dsa_port(&idev, NULL);
 			if (idev && idev->netdev_ops == eth->netdev[0]->netdev_ops) {
 				struct mtk_mac *mac = netdev_priv(idev);
 
@@ -452,6 +457,14 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 			return err;
 	}
 
+	err = mtk_flow_set_output_device(eth, &foe, odev, data.eth.h_dest,
+					 &wed_index);
+	if (err)
+		return err;
+
+	if (wed_index >= 0 && (err = mtk_wed_flow_add(wed_index)) < 0)
+		return err;
+
 	if (offload_type == MTK_PPE_PKT_TYPE_BRIDGE)
 		foe.bridge.vlan = data.vlan_in;
 
@@ -460,14 +473,6 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 
 	if (data.pppoe.num == 1)
 		mtk_foe_entry_set_pppoe(eth, &foe, data.pppoe.sid);
-
-	err = mtk_flow_set_output_device(eth, &foe, odev, data.eth.h_dest,
-					 &wed_index);
-	if (err)
-		return err;
-
-	if (wed_index >= 0 && (err = mtk_wed_flow_add(wed_index)) < 0)
-		return err;
 
 	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
@@ -650,9 +655,7 @@ int mtk_eth_setup_tc(struct net_device *dev, enum tc_setup_type type,
 	}
 }
 
-int mtk_eth_offload_init(struct mtk_eth *eth, u8 id)
+int mtk_eth_offload_init(struct mtk_eth *eth)
 {
-	if (!eth->ppe[id] || !eth->ppe[id]->foe_table)
-		return 0;
 	return rhashtable_init(&eth->flow_table, &mtk_flow_ht_params);
 }

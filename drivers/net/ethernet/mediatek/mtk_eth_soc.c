@@ -6326,11 +6326,11 @@ static int mtk_probe(struct platform_device *pdev)
 				err = -ENOMEM;
 				goto err_deinit_ppe;
 			}
-			err = mtk_eth_offload_init(eth, i);
-
-			if (err)
-				goto err_deinit_ppe;
 		}
+
+		err = mtk_eth_offload_init(eth);
+		if (err)
+			goto err_deinit_ppe;
 	}
 
 	for (i = 0; i < MTK_MAX_DEVS; i++) {

@@ -386,7 +386,7 @@ int mtk_foe_entry_set_ipv6_tuple(struct mtk_eth *eth,
 				 __be32 *src_addr, __be16 src_port,
 				 __be32 *dest_addr, __be16 dest_port);
 int mtk_foe_entry_set_dsa(struct mtk_eth *eth, struct mtk_foe_entry *entry,
-			  int port);
+			  int proto, int port);
 int mtk_foe_entry_set_vlan(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int vid);
 int mtk_foe_entry_set_pppoe(struct mtk_eth *eth, struct mtk_foe_entry *entry,

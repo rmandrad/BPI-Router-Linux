@@ -368,20 +368,29 @@ int mtk_foe_entry_set_ipv6_tuple(struct mtk_eth *eth,
 }
 
 int mtk_foe_entry_set_dsa(struct mtk_eth *eth, struct mtk_foe_entry *entry,
-			  int port)
+			  int proto, int port)
 {
-	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+#if IS_ENABLED(CONFIG_NET_DSA)
+	struct mtk_foe_mac_info *l2;
 
-	l2->etype = BIT(port);
+	if (proto == DSA_TAG_PROTO_MXL862_8021Q) {
+		mtk_foe_entry_set_vlan(eth, entry, port + GENMASK(11, 10));
+	} else {
+		l2 = mtk_foe_entry_l2(eth, entry);
+		l2->etype = BIT(port);
 
-	if (!(entry->ib1 & mtk_get_ib1_vlan_layer_mask(eth)))
-		entry->ib1 |= mtk_prep_ib1_vlan_layer(eth, 1);
-	else
-		l2->etype |= BIT(8);
+		if (!(entry->ib1 & mtk_get_ib1_vlan_layer_mask(eth)))
+			entry->ib1 |= mtk_prep_ib1_vlan_layer(eth, 1);
+		else
+			l2->etype |= BIT(8);
 
-	entry->ib1 &= ~mtk_get_ib1_vlan_tag_mask(eth);
+		entry->ib1 &= ~mtk_get_ib1_vlan_tag_mask(eth);
+	}
 
 	return 0;
+#else
+	return -ENOTSUPP;
+#endif
 }
 
 int mtk_foe_entry_set_vlan(struct mtk_eth *eth, struct mtk_foe_entry *entry,
@@ -946,9 +955,11 @@ void mtk_ppe_deinit(struct mtk_eth *eth)
 
 	for (i = 0; i < ARRAY_SIZE(eth->ppe); i++) {
 		if (!eth->ppe[i])
-			return;
+			continue;
 		rhashtable_destroy(&eth->ppe[i]->l2_flows);
 	}
+	if (rcu_access_pointer(eth->flow_table.tbl))
+		rhashtable_destroy(&eth->flow_table);
 }
 
 static void mtk_ppe_init_foe_table(struct mtk_ppe *ppe)
