@@ -318,7 +318,14 @@ int nf_flow_table_init(struct nf_flowtable *flow_table);
 void nf_flow_table_free(struct nf_flowtable *flow_table);
 
 void flow_offload_teardown(struct flow_offload *flow);
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
 void flow_offload_teardown_by_tuple(struct flow_offload_tuple *tuple);
+#else
+static inline void
+flow_offload_teardown_by_tuple(struct flow_offload_tuple *tuple)
+{
+}
+#endif
 
 void nf_flow_snat_port(const struct flow_offload *flow,
 		       struct sk_buff *skb, unsigned int thoff,

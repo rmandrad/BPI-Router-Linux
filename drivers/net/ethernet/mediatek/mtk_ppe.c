@@ -549,8 +549,13 @@ static bool mtk_foe_mac_match(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 static bool mtk_ppe_check_wdma_path(struct mtk_eth *eth, struct mtk_foe_entry *foe)
 {
 	u32 *ib2 = mtk_foe_entry_ib2(eth, foe);
-	u32 sp = mtk_get_ib1_sp(eth, foe);
+	u32 sp;
 	u32 winfo = FIELD_GET(MTK_FOE_IB2_WDMA_WINFO, *ib2);
+
+	if (mtk_is_netsys_v2_or_greater(eth))
+		sp = FIELD_GET(MTK_FOE_IB2_DEST_PORT_V2, *ib2);
+	else
+		sp = FIELD_GET(MTK_FOE_IB2_DEST_PORT, *ib2);
 
 	if (winfo || sp == PSE_WDMA0_PORT || sp == PSE_WDMA1_PORT ||
 	    sp == PSE_WDMA2_PORT)
@@ -1308,7 +1313,7 @@ int mtk_ppe_roaming_start(struct mtk_eth *eth)
 	addr.nl_family = AF_NETLINK;
 	addr.nl_pid = 65534;
 	addr.nl_groups = BIT(RTNLGRP_NEIGH - 1);
-	ret = kernel_bind(sock, (struct sockaddr *)&addr, sizeof(addr));
+	ret = kernel_bind(sock, (struct sockaddr_unsized *)&addr, sizeof(addr));
 	if (ret < 0) {
 		pr_warn("mtk_ppe: unable to bind roaming socket\n");
 		sock_release(sock);
