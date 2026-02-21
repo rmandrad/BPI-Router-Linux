@@ -921,9 +921,10 @@ struct net_device_path {
 			u16 wcid;
 			u8 bss;
 			u8 amsdu;
+			u8 tid;
 		} mtk_wdma;
+		};
 	};
-};
 
 #define NET_DEVICE_PATH_STACK_MAX	5
 #define NET_DEVICE_PATH_VLAN_MAX	2

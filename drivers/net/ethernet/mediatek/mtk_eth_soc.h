@@ -1537,8 +1537,12 @@ struct mtk_eth {
 
 	struct metadata_dst		*dsa_meta[MTK_MAX_DSA_PORTS];
 
+	u8				debug_level;
 	struct mtk_ppe			*ppe[3];
 	struct rhashtable		flow_table;
+	struct socket			*ppe_roam_sock;
+	struct work_struct		ppe_roam_work;
+	unsigned char			ppe_roam_buf[1024];
 
 	struct bpf_prog			__rcu *prog;
 

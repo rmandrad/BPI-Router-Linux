@@ -3974,6 +3974,11 @@ static int mtk_open(struct net_device *dev)
 		for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
 			mtk_ppe_start(eth->ppe[i]);
 
+		err = mtk_ppe_roaming_start(eth);
+		if (err)
+			netdev_err(dev, "%s: could not start ppe roaming work: %d\n",
+				   __func__, err);
+
 		for (i = 0; i < MTK_MAX_DEVS; i++) {
 			if (!eth->netdev[i])
 				continue;
@@ -4128,6 +4133,8 @@ static int mtk_stop(struct net_device *dev)
 	mtk_stop_dma(eth, eth->soc->reg_map->pdma.glo_cfg);
 
 	mtk_dma_free(eth);
+
+	mtk_ppe_roaming_stop(eth);
 
 	for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
 		mtk_ppe_stop(eth->ppe[i]);

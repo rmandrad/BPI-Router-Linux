@@ -3,6 +3,7 @@
 
 #include <linux/kernel.h>
 #include <linux/debugfs.h>
+#include <linux/uaccess.h>
 
 #include <net/ipv6.h>
 
@@ -181,6 +182,54 @@ mtk_ppe_debugfs_foe_bind_show(struct seq_file *m, void *private)
 }
 DEFINE_SHOW_ATTRIBUTE(mtk_ppe_debugfs_foe_bind);
 
+static int mtk_ppe_debugfs_level_show(struct seq_file *m, void *private)
+{
+	struct mtk_ppe *ppe = m->private;
+
+	seq_printf(m, "PPE debug level=%u\n", ppe->eth->debug_level);
+
+	return 0;
+}
+
+static int mtk_ppe_debugfs_level_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, mtk_ppe_debugfs_level_show, inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_debugfs_level_write(struct file *file, const char __user *buf,
+			    size_t count, loff_t *offset)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_ppe *ppe = m->private;
+	char tmp[8] = {};
+	u8 level;
+
+	if (!count || count >= sizeof(tmp))
+		return -EINVAL;
+
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+
+	if (kstrtou8(tmp, 0, &level))
+		return -EINVAL;
+
+	if (level > 7)
+		return -EINVAL;
+
+	ppe->eth->debug_level = level;
+
+	return count;
+}
+
+static const struct file_operations mtk_ppe_debugfs_level_fops = {
+	.open = mtk_ppe_debugfs_level_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_debugfs_level_write,
+	.release = single_release,
+};
+
 int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index)
 {
 	struct dentry *root;
@@ -190,6 +239,8 @@ int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index)
 	root = debugfs_create_dir(ppe->dirname, NULL);
 	debugfs_create_file("entries", S_IRUGO, root, ppe, &mtk_ppe_debugfs_foe_all_fops);
 	debugfs_create_file("bind", S_IRUGO, root, ppe, &mtk_ppe_debugfs_foe_bind_fops);
+	debugfs_create_file("debug_level", 0444, root, ppe,
+			    &mtk_ppe_debugfs_level_fops);
 
 	return 0;
 }

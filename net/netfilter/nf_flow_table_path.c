@@ -5,6 +5,7 @@
 #include <linux/netlink.h>
 #include <linux/netfilter.h>
 #include <linux/spinlock.h>
+#include <linux/if_vlan.h>
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/nf_tables.h>
 #include <net/ip.h>
@@ -14,6 +15,7 @@
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_extend.h>
 #include <net/netfilter/nf_flow_table.h>
+#include "../bridge/br_private.h"
 
 static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
 {
@@ -85,14 +87,47 @@ struct nft_forward_info {
 	u8 ingress_vlans;
 	u8 h_source[ETH_ALEN];
 	u8 h_dest[ETH_ALEN];
+	u32 priority;
 	enum flow_offload_xmit_type xmit_type;
 };
+
+static void nft_fill_vlan_passthrough_info(const struct nft_pktinfo *pkt,
+					   struct nft_forward_info *info)
+{
+	struct net_bridge_port *port;
+
+	if (!skb_vlan_tag_present(pkt->skb))
+		return;
+
+	rcu_read_lock();
+	port = br_port_get_rcu(pkt->skb->dev);
+	/* Bridge handles this VLAN when filtering is enabled on the bridge. */
+	if (port && !br_opt_get(port->br, BROPT_VLAN_ENABLED)) {
+		if (info->num_encaps >= NF_FLOW_TABLE_ENCAP_MAX) {
+			info->indev = NULL;
+			goto out;
+		}
+
+		info->encap[info->num_encaps].id = skb_vlan_tag_get_id(pkt->skb);
+		info->encap[info->num_encaps].proto = pkt->skb->vlan_proto;
+		info->num_encaps++;
+	}
+
+out:
+	rcu_read_unlock();
+}
+
+static u16 nft_vlan_get_egress_qos(const struct net_device *dev, u32 priority)
+{
+	return vlan_dev_get_egress_qos_mask((struct net_device *)dev, priority);
+}
 
 static void nft_dev_path_info(const struct net_device_path_stack *stack,
 			      struct nft_forward_info *info,
 			      unsigned char *ha, struct nf_flowtable *flowtable)
 {
 	const struct net_device_path *path;
+	u32 vlan_pcp;
 	int i;
 
 	memcpy(info->h_dest, ha, ETH_ALEN);
@@ -131,12 +166,18 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 					info->indev = NULL;
 					break;
 				}
-				info->encap[info->num_encaps].id =
-					path->encap.id;
-				info->encap[info->num_encaps].proto =
-					path->encap.proto;
+
+				info->encap[info->num_encaps].id = path->encap.id;
+				info->encap[info->num_encaps].proto = path->encap.proto;
+				if (path->type == DEV_PATH_VLAN) {
+					vlan_pcp = nft_vlan_get_egress_qos(path->dev,
+									   info->priority);
+					info->encap[info->num_encaps].id |= vlan_pcp;
+				}
+
 				info->num_encaps++;
 			}
+
 			if (path->type == DEV_PATH_PPPOE)
 				memcpy(info->h_dest, path->encap.h_dest, ETH_ALEN);
 			break;
@@ -158,15 +199,20 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 				info->num_encaps++;
 				break;
 			case DEV_PATH_BR_VLAN_UNTAG:
-				if (WARN_ON_ONCE(info->num_encaps-- == 0)) {
+				if (WARN_ON_ONCE(!info->num_encaps)) {
 					info->indev = NULL;
 					break;
 				}
+				info->num_encaps--;
 				break;
 			case DEV_PATH_BR_VLAN_KEEP:
 				break;
 			}
 			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
+			break;
+		case DEV_PATH_MTK_WDMA:
+			if (is_zero_ether_addr(info->h_source))
+				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
 			break;
 		default:
 			info->indev = NULL;
@@ -235,26 +281,30 @@ static int nft_flow_tunnel_update_route(const struct nft_pktinfo *pkt,
 	return 0;
 }
 
-static void nft_dev_forward_path(const struct nft_pktinfo *pkt,
-				 struct nf_flow_route *route,
-				 const struct nf_conn *ct,
-				 enum ip_conntrack_dir dir,
-				 struct nft_flowtable *ft)
+static int nft_dev_forward_path(const struct nft_pktinfo *pkt,
+				struct nf_flow_route *route,
+				const struct nf_conn *ct,
+				enum ip_conntrack_dir dir,
+				struct nft_flowtable *ft)
 {
 	const struct dst_entry *dst = route->tuple[dir].dst;
 	struct net_device_path_stack stack;
-	struct nft_forward_info info = {};
+	struct nft_forward_info info = {
+		.priority = pkt->skb->priority,
+	};
 	unsigned char ha[ETH_ALEN];
 	int i;
 
-	if (nft_dev_fill_forward_path(route, dst, ct, dir, ha, &stack) >= 0)
+	if (nft_dev_fill_forward_path(route, dst, ct, dir, ha, &stack) >= 0) {
+		nft_fill_vlan_passthrough_info(pkt, &info);
 		nft_dev_path_info(&stack, &info, ha, &ft->data);
+	}
 
 	if (info.outdev)
 		route->tuple[dir].out.ifindex = info.outdev->ifindex;
 
 	if (!info.indev || !nft_flowtable_find_dev(info.indev, ft))
-		return;
+		return -ENOENT;
 
 	route->tuple[!dir].in.ifindex = info.indev->ifindex;
 	for (i = 0; i < info.num_encaps; i++) {
@@ -273,11 +323,14 @@ static void nft_dev_forward_path(const struct nft_pktinfo *pkt,
 	route->tuple[!dir].in.num_encaps = info.num_encaps;
 	route->tuple[!dir].in.ingress_vlans = info.ingress_vlans;
 
-	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT) {
+	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT &&
+	    route->tuple[dir].xmit_type != FLOW_OFFLOAD_XMIT_XFRM) {
 		memcpy(route->tuple[dir].out.h_source, info.h_source, ETH_ALEN);
 		memcpy(route->tuple[dir].out.h_dest, info.h_dest, ETH_ALEN);
 		route->tuple[dir].xmit_type = info.xmit_type;
 	}
+
+	return 0;
 }
 
 int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
@@ -322,10 +375,12 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
 	nft_default_forward_path(route, this_dst, dir);
 	nft_default_forward_path(route, other_dst, !dir);
 
-	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH)
-		nft_dev_forward_path(pkt, route, ct, dir, ft);
-	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH)
-		nft_dev_forward_path(pkt, route, ct, !dir, ft);
+	if (nft_dev_forward_path(pkt, route, ct, dir, ft) ||
+	    nft_dev_forward_path(pkt, route, ct, !dir, ft)) {
+		dst_release(route->tuple[dir].dst);
+		dst_release(route->tuple[!dir].dst);
+		return -ENOENT;
+	}
 
 	return 0;
 }

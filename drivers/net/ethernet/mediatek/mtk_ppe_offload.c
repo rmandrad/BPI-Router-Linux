@@ -89,33 +89,33 @@ mtk_flow_offload_mangle_eth(const struct flow_action_entry *act, void *eth)
 }
 
 static int
-mtk_flow_get_wdma_info(struct net_device *dev, const u8 *addr, struct mtk_wdma_info *info)
+mtk_flow_get_wdma_info(struct net_device *dev, const u8 *addr,
+		       struct mtk_wdma_info *info)
 {
-	struct net_device_path_stack stack;
-	struct net_device_path *path;
-	int err;
+	struct net_device_path_ctx ctx = {};
+	struct net_device_path path = {};
 
 	if (!dev)
 		return -ENODEV;
 
+	ctx.dev = dev;
+
 	if (!IS_ENABLED(CONFIG_NET_MEDIATEK_SOC_WED))
 		return -1;
 
-	rcu_read_lock();
-	err = dev_fill_forward_path(dev, addr, &stack);
-	rcu_read_unlock();
-	if (err)
-		return err;
-
-	path = &stack.path[stack.num_paths - 1];
-	if (path->type != DEV_PATH_MTK_WDMA)
+	if (!dev->netdev_ops || !dev->netdev_ops->ndo_fill_forward_path)
 		return -1;
 
-	info->wdma_idx = path->mtk_wdma.wdma_idx;
-	info->queue = path->mtk_wdma.queue;
-	info->bss = path->mtk_wdma.bss;
-	info->wcid = path->mtk_wdma.wcid;
-	info->amsdu = path->mtk_wdma.amsdu;
+	memcpy(ctx.daddr, addr, sizeof(ctx.daddr));
+	path.mtk_wdma.tid = info->tid;
+
+	if (dev->netdev_ops->ndo_fill_forward_path(&ctx, &path))
+		return -1;
+
+	if (path.type != DEV_PATH_MTK_WDMA)
+		return -1;
+
+	memcpy(info, &path.mtk_wdma, sizeof(*info));
 
 	return 0;
 }
@@ -194,14 +194,17 @@ mtk_flow_get_dsa_port(struct net_device **dev, int *proto)
 static int
 mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 			   struct net_device *dev, const u8 *dest_mac,
-			   int *wed_index)
+			   int *wed_index, u8 dscp)
 {
 	struct mtk_wdma_info info = {};
 	int pse_port, dsa_port, dsa_proto, queue;
 
+	info.tid = dscp;
+
 	if (mtk_flow_get_wdma_info(dev, dest_mac, &info) == 0) {
 		mtk_foe_entry_set_wdma(eth, foe, info.wdma_idx, info.queue,
-				       info.bss, info.wcid, info.amsdu);
+				       info.bss, info.wcid, info.tid,
+				       info.amsdu);
 		if (mtk_is_netsys_v2_or_greater(eth)) {
 			switch (info.wdma_idx) {
 			case 0:
@@ -262,6 +265,7 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 	int wed_index = -1;
 	u16 addr_type = 0;
 	u8 l4proto = 0;
+	u8 dscp = 0;
 	int err = 0;
 	int i;
 
@@ -308,6 +312,13 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 		l4proto = match.key->ip_proto;
 	} else {
 		return -EOPNOTSUPP;
+	}
+
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_IP)) {
+		struct flow_match_ip match;
+
+		flow_rule_match_ip(rule, &match);
+		dscp = match.key->tos;
 	}
 
 	switch (addr_type) {
@@ -458,7 +469,7 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 	}
 
 	err = mtk_flow_set_output_device(eth, &foe, odev, data.eth.h_dest,
-					 &wed_index);
+					 &wed_index, dscp);
 	if (err)
 		return err;
 
