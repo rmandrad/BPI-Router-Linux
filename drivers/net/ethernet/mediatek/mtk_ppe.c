@@ -1209,7 +1209,7 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 		       MTK_PPE_FLOW_CFG_IP4_UDP_FRAG;
 	ppe_w32(ppe, MTK_PPE_FLOW_CFG, val);
 
-	val = FIELD_PREP(MTK_PPE_UNBIND_AGE_MIN_PACKETS, 1000) |
+	val = FIELD_PREP(MTK_PPE_UNBIND_AGE_MIN_PACKETS, 500) |
 	      FIELD_PREP(MTK_PPE_UNBIND_AGE_DELTA, 3);
 	ppe_w32(ppe, MTK_PPE_UNBIND_AGE, val);
 
