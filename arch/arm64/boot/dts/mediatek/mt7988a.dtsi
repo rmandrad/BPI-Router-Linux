@@ -1232,6 +1232,10 @@
 		};
 	};
 
+	trng {
+		compatible = "mediatek,mt7988-rng";
+	};
+	
 	timer {
 		compatible = "arm,armv8-timer";
 		interrupt-parent = <&gic>;
