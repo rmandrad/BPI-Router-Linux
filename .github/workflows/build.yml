@@ -88,62 +88,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ccache-${{ github.ref_name }}
 
-      - name: Build for bananapi-r2
-        run: |
-          export PATH=/usr/lib/ccache:$PATH
-          bash build.sh importconfig
-          bash build.sh build
-          bash build.sh cryptodev
-      - name: Pack for bananapi-r2
-        run: |
-          bash build.sh pack_debs
-          bash build.sh pack
-          bash build.sh clean
-          df -h;du -h --max-depth=3 ~
-
-      - name: Build for bananapi-r64
-        run: |
-          sed -ri 's/^#(board=bpi-r64)/\1/' build.conf #change board to r64
-          bash build.sh importconfig
-          bash build.sh build
-          bash build.sh cryptodev
-      - name: Pack for bananapi-r64
-        run: |
-          bash build.sh pack_debs
-          bash build.sh pack
-          bash build.sh clean
-          df -h;du -h --max-depth=3 ~
-
-      - name: Build for bananapi-r2pro
-        run: |
-          sed -ri 's/^#(board=bpi-r2pro)/\1/' build.conf #change board to r2pro
-          bash build.sh importconfig
-          bash build.sh build
-      - name: Pack for bananapi-r2pro
-        run: |
-          bash build.sh pack_debs
-          bash build.sh pack
-          bash build.sh clean
-          df -h;du -h --max-depth=3 ~
-
-      - name: Build for bananapi-r3 (mini)
-        run: |
-          sed -ri 's/^#(board=bpi-r3)$/\1/' build.conf #change board to r3
-          bash build.sh importconfig
-          bash build.sh build
-      - name: Pack for bananapi-r3
-        run: |
-          bash build.sh pack_debs
-          bash build.sh pack
-          bash build.sh clean
-          df -h;du -h --max-depth=3 ~
-
       - name: Build for bananapi-r4
         run: |
           sed -ri 's/^#(board=bpi-r4)$/\1/' build.conf #change board to r4
           bash build.sh importconfig
           bash build.sh build
       - name: Pack for bananapi-r4
+        run: |
+          bash build.sh pack_debs
+          bash build.sh pack
+          bash build.sh clean
+          df -h;
+          du -h --max-depth=3 ~
+
+      - name: Build for bananapi-r4pro
+        run: |
+          sed -ri 's/^#(board=bpi-r4pro)$/\1/' build.conf #change board to r4pro
+          bash build.sh importconfig
+          bash build.sh build
+      - name: Pack for bananapi-r4pro
         run: |
           bash build.sh pack_debs
           bash build.sh pack
