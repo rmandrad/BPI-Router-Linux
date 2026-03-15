@@ -499,6 +499,7 @@ void mt7996_vif_link_remove(struct mt76_phy *mphy, struct ieee80211_vif *vif,
 				break;
 			}
 		}
+		mvif->mt76.valid_links &= ~BIT(link_id);
 	}
 }
 
