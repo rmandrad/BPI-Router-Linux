@@ -480,6 +480,9 @@ extern struct work_struct cfg80211_disconnect_work;
 void cfg80211_set_dfs_state(struct wiphy *wiphy,
 			    const struct cfg80211_chan_def *chandef,
 			    enum nl80211_dfs_state dfs_state);
+void cfg80211_set_cac_state(struct wiphy *wiphy,
+			    const struct cfg80211_chan_def *chandef,
+			    bool cac_ongoing);
 
 void cfg80211_dfs_channels_update_work(struct work_struct *work);
 
