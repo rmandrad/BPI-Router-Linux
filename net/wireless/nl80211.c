@@ -11231,6 +11231,7 @@ static int nl80211_start_radar_detection(struct sk_buff *skb,
 	wdev->links[link_id].cac_started = true;
 	wdev->links[link_id].cac_start_time = jiffies;
 	wdev->links[link_id].cac_time_ms = cac_time_ms;
+	cfg80211_set_cac_state(wiphy, &chandef, true);
 
 	return 0;
 }
@@ -21080,6 +21081,13 @@ nl80211_radar_notify(struct cfg80211_registered_device *rdev,
 		if (nla_put_u32(msg, NL80211_ATTR_IFINDEX, netdev->ifindex) ||
 		    nla_put_u64_64bit(msg, NL80211_ATTR_WDEV, wdev_id(wdev),
 				      NL80211_ATTR_PAD))
+			goto nla_put_failure;
+	}
+
+	if (rdev->background_radar_wdev &&
+	    cfg80211_chandef_identical(&rdev->background_radar_chandef,
+				       chandef)) {
+		if (nla_put_flag(msg, NL80211_ATTR_RADAR_BACKGROUND))
 			goto nla_put_failure;
 	}
 
