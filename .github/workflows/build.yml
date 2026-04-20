@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        board: [bpi-r2, bpi-r64, bpi-r2pro, bpi-r3, bpi-r4]
+        board: [bpi-r4, bpi-r4pro]
 
     steps:
       - name: Setup env
