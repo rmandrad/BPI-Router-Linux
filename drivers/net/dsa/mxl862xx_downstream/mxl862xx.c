@@ -34,7 +34,7 @@
 	mxl862xx_api_wrap(dev, cmd, &(data), sizeof((data)), true)
 
 /* DSA port index is 0 based, the MXL FW has 1 as the base index */
-#define DSA_MXL_PORT(port) ((port))
+#define DSA_MXL_PORT(port) ((port) + 1)
 
 #define MXL862XX_SDMA_PCTRLP(p) (0xBC0 + ((p) * 0x6))
 #define MXL862XX_SDMA_PCTRL_EN BIT(0) /* SDMA Port Enable */
@@ -4018,9 +4018,12 @@ static int mxl862xx_probe(struct mdio_device *mdiodev)
 		return -EINVAL;
 	}
 
-	dev_info(dev, "Firmware version %d.%d.%d.%d",
-		 fw_version.iv_major, fw_version.iv_minor,
-		 fw_version.iv_revision, fw_version.iv_build_num);
+	dev_info(dev, "mxl862xx dsa Firmware version %u.%u.%u.%u (%s)",
+		 fw_version.iv_major & 0x7F,
+		 fw_version.iv_minor,
+		 le16_to_cpu(fw_version.iv_revision),
+		 le32_to_cpu(fw_version.iv_build_num),
+		 (fw_version.iv_major & BIT(7)) ? "release" : "test");
 
 	mux_np = of_get_child_by_name(priv->ds->dev->of_node, "ds-mux-bus");
 	if (mux_np) {

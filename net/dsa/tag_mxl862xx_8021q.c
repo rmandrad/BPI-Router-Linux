@@ -13,7 +13,7 @@
 #include "tag.h"
 #include "tag_8021q.h"
 
-#define MXL862_8021Q_NAME "mxl862xx-8021q"
+#define MXL862_8021Q_NAME "mxl862_8021q"
 
 static struct sk_buff *mxl862_8021q_xmit(struct sk_buff *skb,
 					 struct net_device *netdev)

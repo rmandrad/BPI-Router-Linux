@@ -188,69 +188,56 @@
 };
 
 &mdio_bus {
-	clock-frequency = <20000000>;
+	clock-frequency = <12500000>;
+
 	switch16: switch@10 {
-		#address-cells = <1>;
-		#size-cells = <0>;
 		compatible = "maxlinear,mxl86252";
 		reg = <0x10>;
 		dsa,member = <0 0>;
-
 		status = "okay";
-
-		reset-gpios = <&pio 4 GPIO_ACTIVE_LOW>;
-		reset-assert-us = <100000>;
-		reset-deassert-us = <1000000>;
 
 		ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			/* Microcontroller port */
-			port@0 {
+			port0: port@0 {
 				reg = <0>;
-				status = "disabled";
+				label = "lan0";
+				phy-handle = <&switchphy0>;
+				phy-mode = "internal";
+				status = "okay";
 			};
 
-			port@1 {
+			port1: port@1 {
 				reg = <1>;
 				label = "lan1";
-				phy-handle = <&swphy0>;
+				phy-handle = <&switchphy1>;
 				phy-mode = "internal";
 				status = "okay";
 			};
 
-			port@2 {
+			port2: port@2 {
 				reg = <2>;
 				label = "lan2";
-				phy-handle = <&swphy1>;
+				phy-handle = <&switchphy2>;
 				phy-mode = "internal";
 				status = "okay";
 			};
 
-			port@3 {
+			port3: port@3 {
 				reg = <3>;
 				label = "lan3";
-				phy-handle = <&swphy2>;
+				phy-handle = <&switchphy3>;
 				phy-mode = "internal";
 				status = "okay";
 			};
 
-			port@4 {
-				reg = <4>;
-				label = "lan4";
-				phy-handle = <&swphy3>;
-				phy-mode = "internal";
-				status = "okay";
-			};
-
-			port@9 {
-				reg = <9>;
+			port8: port@8 {
+				reg = <8>;
 				label = "cpu";
-				phy-mode = "10gbase-r";
+				phy-mode = "usxgmii";
 				ethernet = <&gmac2>;
-				dsa-tag-protocol = "mxl862xx-8021q";
-
+				dsa-tag-protocol = "mxl862_8021q";
 				fixed-link {
 					speed = <10000>;
 					full-duplex;
@@ -270,17 +257,24 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			swphy0: swphy@0 {
+			switchphy0: switchphy@0 {
 				reg = <0>;
 			};
-			swphy1: swphy@1 {
+
+			switchphy1: switchphy@1 {
 				reg = <1>;
 			};
-			swphy2: swphy@2 {
+
+			switchphy2: switchphy@2 {
 				reg = <2>;
 			};
-			swphy3: swphy@3 {
+
+			switchphy3: switchphy@3 {
 				reg = <3>;
+			};
+
+			switchphy4: switchphy@4 {
+				reg = <4>;
 			};
 		};
 	};
