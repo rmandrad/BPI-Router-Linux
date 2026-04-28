@@ -189,6 +189,8 @@
 #define EIP197_PE_DEBUG(n)			(0x1ff4 + (0x2000 * (n)))
 #define EIP197_PE_OPTIONS(n)			(0x1ff8 + (0x2000 * (n)))
 #define EIP197_PE_VERSION(n)			(0x1ffc + (0x2000 * (n)))
+#define EIP197_FORCE_CLOCK_ON2			0xffd8
+#define EIP197_FORCE_CLOCK_ON			0xffe8
 #define EIP197_MST_CTRL				0xfff4
 #define EIP197_OPTIONS				0xfff8
 #define EIP197_VERSION				0xfffc
@@ -983,6 +985,7 @@ extern struct safexcel_alg_template safexcel_alg_hmac_sha3_256;
 extern struct safexcel_alg_template safexcel_alg_hmac_sha3_384;
 extern struct safexcel_alg_template safexcel_alg_hmac_sha3_512;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha1_cbc_des;
+extern struct safexcel_alg_template safexcel_alg_authenc_hmac_md5_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha256_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha224_cbc_des3_ede;
 extern struct safexcel_alg_template safexcel_alg_authenc_hmac_sha512_cbc_des3_ede;

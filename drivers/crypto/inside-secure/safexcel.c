@@ -414,13 +414,13 @@ static int eip197_load_firmwares(struct safexcel_crypto_priv *priv)
 	const struct firmware *fw[FW_NB];
 	char fw_path[37], *dir = NULL;
 	int i, j, ret = 0, pe;
-	int ipuesz, ifppsz, minifw = 0;
+	int ipuesz, ifppsz, minifw = 1;
 
 	if (priv->data->version == EIP197D_MRVL)
 		dir = "eip197d";
 	else if (priv->data->version == EIP197B_MRVL ||
 		 priv->data->version == EIP197_DEVBRD)
-		dir = "eip197b";
+		dir = "eip197_minifw";
 	else if (priv->data->version == EIP197C_MXL)
 		dir = "eip197c";
 	else
@@ -454,6 +454,9 @@ retry_fw:
 		       EIP197_PE(priv) + EIP197_PE_ICE_RAM_CTRL(pe));
 
 	ipuesz = eip197_write_firmware(priv, fw[FW_IPUE]);
+
+	for (j = 0; j < i; j++)
+		release_firmware(fw[j]);
 
 	if (eip197_start_firmware(priv, ipuesz, ifppsz, minifw)) {
 		dev_dbg(priv->dev, "Firmware loaded successfully\n");
@@ -605,6 +608,9 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 	 */
 	if (priv->flags & SAFEXCEL_HW_EIP197) {
 		val = readl(EIP197_HIA_AIC(priv) + EIP197_HIA_MST_CTRL);
+		val &= 0xffffff00;
+		val |= EIP197_MST_CTRL_RD_CACHE(3);
+		val |= EIP197_MST_CTRL_WD_CACHE(3);
 		val |= EIP197_MST_CTRL_TX_MAX_CMD(5);
 		writel(val, EIP197_HIA_AIC(priv) + EIP197_HIA_MST_CTRL);
 	}
@@ -795,6 +801,11 @@ static int safexcel_hw_init(struct safexcel_crypto_priv *priv)
 		ret = eip197_load_firmwares(priv);
 		if (ret)
 			return ret;
+	}
+
+	if (priv->flags & SAFEXCEL_HW_EIP197) {
+		writel(0xffffffff, EIP197_HIA_GEN_CFG(priv) + EIP197_FORCE_CLOCK_ON);
+		writel(0xffffffff, EIP197_HIA_GEN_CFG(priv) + EIP197_FORCE_CLOCK_ON2);
 	}
 
 	return safexcel_hw_setup_cdesc_rings(priv) ?:
@@ -1242,6 +1253,7 @@ static struct safexcel_alg_template *safexcel_algs[] = {
 	&safexcel_alg_hmac_sha3_384,
 	&safexcel_alg_hmac_sha3_512,
 	&safexcel_alg_authenc_hmac_sha1_cbc_des,
+	&safexcel_alg_authenc_hmac_md5_cbc_des3_ede,
 	&safexcel_alg_authenc_hmac_sha256_cbc_des3_ede,
 	&safexcel_alg_authenc_hmac_sha224_cbc_des3_ede,
 	&safexcel_alg_authenc_hmac_sha512_cbc_des3_ede,
