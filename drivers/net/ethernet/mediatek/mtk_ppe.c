@@ -514,6 +514,7 @@ mtk_flow_entry_match(struct mtk_eth *eth, struct mtk_flow_entry *entry,
 	return !memcmp(&entry->data.data, &data->data, len - 4);
 }
 
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
 static bool mtk_foe_mac_match(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			      const u8 *mac)
 {
@@ -678,6 +679,7 @@ out:
 	if (!work_pending(&eth->ppe_roam_work))
 		schedule_work(&eth->ppe_roam_work);
 }
+#endif
 
 static void
 __mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
@@ -1293,6 +1295,7 @@ int mtk_ppe_stop(struct mtk_ppe *ppe)
 
 int mtk_ppe_roaming_start(struct mtk_eth *eth)
 {
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
 	struct sockaddr_nl addr = {};
 	struct socket *sock = NULL;
 	int ret;
@@ -1326,10 +1329,14 @@ int mtk_ppe_roaming_start(struct mtk_eth *eth)
 		pr_info("mtk_ppe: roaming worker activated\n");
 
 	return 0;
+#else
+	return 0;
+#endif
 }
 
 int mtk_ppe_roaming_stop(struct mtk_eth *eth)
 {
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
 	if (!eth->ppe_roam_sock)
 		return -ENOENT;
 
@@ -1341,4 +1348,7 @@ int mtk_ppe_roaming_stop(struct mtk_eth *eth)
 		pr_info("mtk_ppe: roaming worker deactivated\n");
 
 	return 0;
+#else
+	return -ENOENT;
+#endif
 }
