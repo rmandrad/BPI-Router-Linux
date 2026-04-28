@@ -700,6 +700,8 @@ mt7996_mac_fill_rx(struct mt7996_dev *dev, enum mt76_rxq_id q,
 
 		hdr = mt76_skb_get_hdr(skb);
 		fc = hdr->frame_control;
+		if (ieee80211_is_beacon(fc))
+			mt76_rx_beacon(mphy, skb);
 		if (ieee80211_is_data_qos(fc)) {
 			u8 *qos = ieee80211_get_qos_ctl(hdr);
 
@@ -2203,9 +2205,14 @@ mt7996_update_vif_beacon(void *priv, u8 *mac, struct ieee80211_vif *vif)
 
 	for_each_vif_active_link(vif, link_conf, link_id) {
 		struct mt7996_vif_link *link;
+		struct mt7996_phy *link_phy;
 
 		link = mt7996_vif_link(dev, vif, link_id);
-		if (!link || link->phy != phy)
+		if (!link)
+			continue;
+
+		link_phy = mt7996_vif_link_phy(link);
+		if (link_phy != phy)
 			continue;
 
 		mt7996_mcu_add_beacon(dev->mt76.hw, vif, link_conf,
@@ -2248,6 +2255,12 @@ void mt7996_tx_token_put(struct mt7996_dev *dev)
 	}
 	spin_unlock_bh(&dev->mt76.token_lock);
 	idr_destroy(&dev->mt76.token);
+
+	for (id = 0; id < __MT_MAX_BAND; id++) {
+		struct mt76_phy *phy = dev->mt76.phys[id];
+		if (phy)
+			atomic_set(&phy->mgmt_tx_pending, 0);
+	}
 }
 
 static int
@@ -2395,23 +2408,8 @@ mt7996_mac_reset_sta_iter(void *data, struct ieee80211_sta *sta)
 	struct mt7996_dev *dev = data;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(msta->link); i++) {
-		struct mt7996_sta_link *msta_link = NULL;
-
-		msta_link = rcu_replace_pointer(msta->link[i], msta_link,
-						lockdep_is_held(&dev->mt76.mutex));
-		if (!msta_link)
-			continue;
-
-		mt7996_mac_sta_deinit_link(dev, msta_link);
-
-		if (msta->deflink_id == i) {
-			msta->deflink_id = IEEE80211_LINK_UNSPECIFIED;
-			continue;
-		}
-
-		kfree_rcu(msta_link, rcu_head);
-	}
+	for (i = 0; i < ARRAY_SIZE(msta->link); i++)
+		mt7996_mac_sta_remove_link(dev, sta, i, true);
 }
 
 static void
@@ -2544,6 +2542,7 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	if (mtk_wed_device_active(&dev->mt76.mmio.wed))
 		mtk_wed_device_stop(&dev->mt76.mmio.wed);
 
+	mt7996_npu_hw_stop(dev);
 	ieee80211_stop_queues(mt76_hw(dev));
 
 	set_bit(MT76_RESET, &dev->mphy.state);
@@ -2564,13 +2563,18 @@ void mt7996_mac_reset_work(struct work_struct *work)
 		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
 			continue;
 
+		if (mt76_npu_device_active(&dev->mt76) &&
+		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
+			continue;
+
+		if (mt76_queue_is_npu_txfree(&dev->mt76.q_rx[i]))
+			continue;
+
 		napi_disable(&dev->mt76.napi[i]);
 	}
 	napi_disable(&dev->mt76.tx_napi);
 
 	mutex_lock(&dev->mt76.mutex);
-
-	mt7996_npu_hw_stop(dev);
 
 	mt76_wr(dev, MT_MCU_INT_EVENT, MT_MCU_INT_EVENT_DMA_STOPPED);
 
@@ -2591,7 +2595,7 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	mt7996_dma_start(dev, false, false);
 
 	if (!is_mt7996(&dev->mt76) && dev->mt76.hwrro_mode == MT76_HWRRO_V3)
-		mt76_wr(dev, MT_RRO_3_0_EMU_CONF, MT_RRO_3_0_EMU_CONF_EN_MASK);
+		mt76_set(dev, MT_RRO_3_0_EMU_CONF, MT_RRO_3_0_EMU_CONF_EN_MASK);
 
 	if (mtk_wed_device_active(&dev->mt76.mmio.wed)) {
 		u32 wed_irq_mask = MT_INT_TX_DONE_BAND2 |
@@ -2610,6 +2614,8 @@ void mt7996_mac_reset_work(struct work_struct *work)
 				     MT_INT_TX_RX_DONE_EXT);
 	}
 
+	__mt7996_npu_hw_init(dev);
+
 	clear_bit(MT76_MCU_RESET, &dev->mphy.state);
 	mt7996_for_each_phy(dev, phy)
 		clear_bit(MT76_RESET, &phy->mt76->state);
@@ -2617,6 +2623,13 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	mt76_for_each_q_rx(&dev->mt76, i) {
 		if (mtk_wed_device_active(&dev->mt76.mmio.wed) &&
 		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
+			continue;
+
+		if (mt76_npu_device_active(&dev->mt76) &&
+		    mt76_queue_is_wed_rro(&dev->mt76.q_rx[i]))
+			continue;
+
+		if (mt76_queue_is_npu_txfree(&dev->mt76.q_rx[i]))
 			continue;
 
 		napi_enable(&dev->mt76.napi[i]);
@@ -2638,8 +2651,6 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	mt7996_update_beacons(dev);
 
 	mutex_unlock(&dev->mt76.mutex);
-
-	mt7996_npu_hw_init(dev);
 
 	mt7996_for_each_phy(dev, phy)
 		ieee80211_queue_delayed_work(hw, &phy->mt76->mac_work,
@@ -2955,6 +2966,7 @@ void mt7996_mac_work(struct work_struct *work)
 
 	mutex_unlock(&mphy->dev->mutex);
 
+	mt76_beacon_mon_check(mphy);
 	mt76_tx_status_check(mphy->dev, false);
 
 	ieee80211_queue_delayed_work(mphy->hw, &mphy->mac_work,

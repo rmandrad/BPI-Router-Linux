@@ -29,6 +29,10 @@
 #define MT7996_RX_RING_SIZE		1536
 #define MT7996_RX_MCU_RING_SIZE		512
 #define MT7996_RX_MCU_RING_SIZE_WA	1024
+#define MT7996_NPU_TX_RING_SIZE		1024
+#define MT7996_NPU_RX_RING_SIZE		1024
+#define MT7996_NPU_TXD_SIZE		3
+
 /* scatter-gather of mcu event is not supported in connac3 */
 #define MT7996_RX_MCU_BUF_SIZE		(2048 + \
 					 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
@@ -165,6 +169,11 @@ enum mt7996_fem_type {
 	MT7996_FEM_MIX,
 };
 
+#define MT7996_EFUSE_BASE_OFFS_ADIE0	0x400
+#define MT7996_EFUSE_BASE_OFFS_ADIE1	0x1e00
+#define MT7996_EFUSE_BASE_OFFS_ADIE2	0x1200
+#define MT7992_EFUSE_BASE_OFFS_ADIE1	0x1200
+
 enum mt7996_txq_id {
 	MT7996_TXQ_FWDL = 16,
 	MT7996_TXQ_MCU_WM,
@@ -252,8 +261,6 @@ struct mt7996_vif_link {
 	struct mt76_vif_link mt76; /* must be first */
 
 	struct mt7996_sta_link msta_link;
-	struct mt7996_phy *phy;
-
 	struct cfg80211_bitrate_mask bitrate_mask;
 
 	u8 mld_idx;
@@ -472,6 +479,8 @@ struct mt7996_dev {
 		struct list_head page_cache;
 		struct list_head page_map[MT7996_RRO_MSDU_PG_HASH_SIZE];
 	} wed_rro;
+
+	dma_addr_t npu_txd_addr[2 * MT7996_NPU_TXD_SIZE];
 
 	bool ibf;
 	u8 fw_debug_wm;
@@ -719,6 +728,8 @@ int mt7996_mcu_set_radar_th(struct mt7996_dev *dev, int index,
 			    const struct mt7996_dfs_pattern *pattern);
 int mt7996_mcu_set_radio_en(struct mt7996_phy *phy, bool enable);
 int mt7996_mcu_set_rts_thresh(struct mt7996_phy *phy, u32 val);
+int mt7996_mcu_set_protection(struct mt7996_phy *phy, struct mt7996_vif_link *link,
+			      u8 ht_mode, bool use_cts_prot);
 int mt7996_mcu_set_timing(struct mt7996_phy *phy, struct ieee80211_vif *vif,
 			  struct ieee80211_bss_conf *link_conf);
 int mt7996_mcu_get_chan_mib_info(struct mt7996_phy *phy, bool chan_switch);
@@ -743,6 +754,13 @@ void mt7996_mcu_exit(struct mt7996_dev *dev);
 int mt7996_mcu_get_all_sta_info(struct mt7996_phy *phy, u16 tag);
 int mt7996_mcu_wed_rro_reset_sessions(struct mt7996_dev *dev, u16 id);
 int mt7996_mcu_set_sniffer_mode(struct mt7996_phy *phy, bool enabled);
+int mt7996_mcu_set_dup_wtbl(struct mt7996_dev *dev);
+int mt7996_mcu_mld_reconf_stop_link(struct mt7996_dev *dev,
+				    struct ieee80211_vif *vif,
+				    u16 removed_links);
+int mt7996_mcu_mld_link_oper(struct mt7996_dev *dev,
+			     struct ieee80211_bss_conf *link_conf,
+			     struct mt7996_vif_link *link, bool add);
 
 static inline bool mt7996_has_hwrro(struct mt7996_dev *dev)
 {
@@ -823,8 +841,9 @@ void mt7996_mac_twt_teardown_flow(struct mt7996_dev *dev,
 				  struct mt7996_vif_link *link,
 				  struct mt7996_sta_link *msta_link,
 				  u8 flowid);
-void mt7996_mac_sta_deinit_link(struct mt7996_dev *dev,
-				struct mt7996_sta_link *msta_link);
+void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
+				struct ieee80211_sta *sta,
+				unsigned int link_id, bool flush);
 void mt7996_mac_add_twt_setup(struct ieee80211_hw *hw,
 			      struct ieee80211_sta *sta,
 			      struct ieee80211_twt_setup *twt);
@@ -861,6 +880,10 @@ int mt7996_mcu_wtbl_update_hdr_trans(struct mt7996_dev *dev,
 				     struct mt7996_vif_link *link,
 				     struct mt7996_sta_link *msta_link);
 int mt7996_mcu_cp_support(struct mt7996_dev *dev, u8 mode);
+int mt7996_mcu_set_emlsr_mode(struct mt7996_dev *dev,
+			      struct ieee80211_vif *vif,
+			      struct ieee80211_sta *sta,
+			      struct ieee80211_eml_params *eml_params);
 #ifdef CONFIG_MAC80211_DEBUGFS
 void mt7996_sta_add_debugfs(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			    struct ieee80211_sta *sta, struct dentry *dir);
@@ -877,12 +900,19 @@ int mt7996_mtk_init_debugfs(struct mt7996_phy *phy, struct dentry *dir);
 #endif
 
 int mt7996_dma_rro_init(struct mt7996_dev *dev);
+void mt7996_dma_rro_start(struct mt7996_dev *dev);
 
 #ifdef CONFIG_MT7996_NPU
+int __mt7996_npu_hw_init(struct mt7996_dev *dev);
 int mt7996_npu_hw_init(struct mt7996_dev *dev);
 int mt7996_npu_hw_stop(struct mt7996_dev *dev);
 int mt7996_npu_rx_queues_init(struct mt7996_dev *dev);
 #else
+static inline int __mt7996_npu_hw_init(struct mt7996_dev *dev)
+{
+	return 0;
+}
+
 static inline int mt7996_npu_hw_init(struct mt7996_dev *dev)
 {
 	return 0;
