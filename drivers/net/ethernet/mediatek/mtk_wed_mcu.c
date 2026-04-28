@@ -10,6 +10,7 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/mfd/syscon.h>
 #include <linux/soc/mediatek/mtk_wed.h>
+#include <linux/string.h>
 #include <linux/unaligned.h>
 
 #include "mtk_wed_regs.h"
@@ -31,6 +32,40 @@ static struct mtk_wed_wo_memory_region mem_region[] = {
 		.name = "wo-boot",
 	},
 };
+
+static const char *
+mtk_wed_region_fallback_phandle(const char *name)
+{
+	if (!strcmp(name, "wo-ilm"))
+		return "mediatek,wo-ilm";
+
+	if (!strcmp(name, "wo-boot"))
+		return "mediatek,wo-cpuboot";
+
+	return NULL;
+}
+
+static int
+mtk_wed_get_region_resource(struct device_node *np, const char *name,
+			    const char *fallback_phandle,
+			    struct resource *res)
+{
+	struct device_node *target_np;
+	int ret;
+
+	ret = of_reserved_mem_region_to_resource_byname(np, name, res);
+	if (!ret || !fallback_phandle)
+		return ret;
+
+	target_np = of_parse_phandle(np, fallback_phandle, 0);
+	if (!target_np)
+		return ret;
+
+	ret = of_address_to_resource(target_np, 0, res);
+	of_node_put(target_np);
+
+	return ret;
+}
 
 static u32 wo_r32(u32 reg)
 {
@@ -237,10 +272,12 @@ static int
 mtk_wed_get_memory_region(struct mtk_wed_hw *hw, const char *name,
 			  struct mtk_wed_wo_memory_region *region)
 {
+	const char *fallback_phandle = mtk_wed_region_fallback_phandle(name);
 	struct resource res;
 	int ret;
 
-	ret = of_reserved_mem_region_to_resource_byname(hw->node, name, &res);
+	ret = mtk_wed_get_region_resource(hw->node, name,
+					  fallback_phandle, &res);
 	if (ret)
 		return 0;
 

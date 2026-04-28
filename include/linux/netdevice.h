@@ -923,6 +923,7 @@ struct net_device_path {
 			u16 wcid;
 			u8 bss;
 			u8 amsdu;
+			u8 tid;
 		} mtk_wdma;
 	};
 };

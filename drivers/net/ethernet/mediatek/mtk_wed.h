@@ -59,6 +59,7 @@ struct mtk_wdma_info {
 	u16 wcid;
 	u8 bss;
 	u8 amsdu;
+	u8 tid;
 };
 
 #ifdef CONFIG_NET_MEDIATEK_SOC_WED

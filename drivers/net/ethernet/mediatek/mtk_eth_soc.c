@@ -1687,6 +1687,7 @@ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
 	}
 
 	data |= TX_DMA_SWC_V2 | QID_BITS_V2(info->qid);
+	data |= FIELD_PREP(TX_DMA_TPORT_MASK, info->tport);
 	WRITE_ONCE(desc->txd4, data);
 
 	data = 0;
@@ -1707,7 +1708,10 @@ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
 	WRITE_ONCE(desc->txd6, data);
 
 	WRITE_ONCE(desc->txd7, 0);
-	WRITE_ONCE(desc->txd8, 0);
+	data = 0;
+	data |= FIELD_PREP(TX_DMA_TOPS_ENTRY_MASK, info->tops_entry);
+	data |= FIELD_PREP(TX_DMA_CDRT_MASK, info->cdrt);
+	WRITE_ONCE(desc->txd8, data);
 }
 
 static void mtk_tx_set_dma_desc(struct net_device *dev, void *txd,
@@ -1728,7 +1732,10 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 	struct mtk_tx_dma_desc_info txd_info = {
 		.size = skb_headlen(skb),
 		.gso = gso,
-		.csum = skb->ip_summed == CHECKSUM_PARTIAL,
+		.cdrt = 0,
+		.tport = 0,
+		.tops_entry = 0,
+		.csum = skb->ip_summed == CHECKSUM_PARTIAL || gso,
 		.vlan = skb_vlan_tag_present(skb),
 		.qid = skb_get_queue_mapping(skb),
 		.vlan_tci = skb_vlan_tag_get(skb),
@@ -1745,6 +1752,13 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 	int i, n_desc = 1;
 	int queue = skb_get_queue_mapping(skb);
 	int k = 0;
+
+	if (mtk_is_netsys_v3_or_greater(eth) &&
+	    unlikely(skb->inner_protocol == IPPROTO_ESP &&
+		     skb_tnl_cdrt(skb) && is_tnl_tag_valid(skb))) {
+		txd_info.cdrt = skb_tnl_cdrt(skb);
+		txd_info.tport = TPORT_EIP197_QDMA;
+	}
 
 	if (skb->len <= MTK_MIN_TX_LENGTH) {
 		if (skb_put_padto(skb, MTK_MIN_TX_LENGTH))
@@ -1803,6 +1817,14 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 			txd_info.size = min_t(unsigned int, frag_size,
 					      soc->tx.dma_max_len);
 			txd_info.qid = queue;
+
+			if (mtk_is_netsys_v3_or_greater(eth) &&
+			    unlikely(skb->inner_protocol == IPPROTO_ESP &&
+				     skb_tnl_cdrt(skb) && is_tnl_tag_valid(skb))) {
+				txd_info.cdrt = skb_tnl_cdrt(skb);
+				txd_info.tport = TPORT_EIP197_QDMA;
+			}
+
 			txd_info.last = i == skb_shinfo(skb)->nr_frags - 1 &&
 					!(frag_size - txd_info.size);
 			txd_info.addr = skb_frag_dma_map(eth->dma_dev, frag,
@@ -4008,6 +4030,11 @@ static int mtk_open(struct net_device *dev)
 		for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
 			mtk_ppe_start(eth->ppe[i]);
 
+		err = mtk_ppe_roaming_start(eth);
+		if (err)
+			netdev_err(dev, "%s: could not start ppe roaming work: %d\n",
+				   __func__, err);
+
 		for (i = 0; i < MTK_MAX_DEVS; i++) {
 			if (!eth->netdev[i])
 				continue;
@@ -4160,6 +4187,8 @@ static int mtk_stop(struct net_device *dev)
 	mtk_stop_dma(eth, eth->soc->reg_map->pdma.glo_cfg);
 
 	mtk_dma_free(eth);
+
+	mtk_ppe_roaming_stop(eth);
 
 	for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
 		mtk_ppe_stop(eth->ppe[i]);
@@ -6366,11 +6395,11 @@ static int mtk_probe(struct platform_device *pdev)
 				err = -ENOMEM;
 				goto err_deinit_ppe;
 			}
-			err = mtk_eth_offload_init(eth, i);
-
-			if (err)
-				goto err_deinit_ppe;
 		}
+
+		err = mtk_eth_offload_init(eth);
+		if (err)
+			goto err_deinit_ppe;
 	}
 
 	for (i = 0; i < MTK_MAX_DEVS; i++) {

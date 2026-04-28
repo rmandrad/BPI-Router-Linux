@@ -22,6 +22,7 @@
 #include <net/page_pool/types.h>
 #include <linux/bpf_trace.h>
 #include "mtk_ppe.h"
+#include "mtk_tnl.h"
 
 #define MTK_MAX_DSA_PORTS	7
 #define MTK_DSA_PORT_MASK	GENMASK(2, 0)
@@ -361,6 +362,10 @@
 
 #define MTK_TX_DMA_BUF_SHIFT	8
 
+/* QDMA V2 descriptor txd8 */
+#define TX_DMA_CDRT_MASK	GENMASK(7, 0)
+#define TX_DMA_TOPS_ENTRY_MASK	GENMASK(13, 8)
+
 /* QDMA V2 descriptor txd6 */
 #define TX_DMA_INS_VLAN_V2	BIT(16)
 /* QDMA V2 descriptor txd5 */
@@ -370,6 +375,10 @@
 #define TX_DMA_SPTAG_V3         BIT(27)
 
 /* QDMA V2 descriptor txd4 */
+#define TPORT_QDMA		1
+#define TPORT_EIP197		2
+#define TPORT_EIP197_QDMA	3
+#define TX_DMA_TPORT_MASK	GENMASK(3, 0)
 #define TX_DMA_FPORT_SHIFT_V2	8
 #define TX_DMA_FPORT_MASK_V2	0xf
 #define TX_DMA_SWC_V2		BIT(30)
@@ -1290,6 +1299,9 @@ struct mtk_tx_dma_desc_info {
 	u32		size;
 	u16		vlan_tci;
 	u16		qid;
+	u8		cdrt;
+	u8		tport;
+	u8		tops_entry;
 	u8		gso:1;
 	u8		csum:1;
 	u8		vlan:1;
@@ -1520,8 +1532,12 @@ struct mtk_eth {
 
 	struct metadata_dst		*dsa_meta[MTK_MAX_DSA_PORTS];
 
+	u8				debug_level;
 	struct mtk_ppe			*ppe[3];
 	struct rhashtable		flow_table;
+	struct socket			*ppe_roam_sock;
+	struct work_struct		ppe_roam_work;
+	unsigned char			ppe_roam_buf[1024];
 
 	struct bpf_prog			__rcu *prog;
 
@@ -1714,7 +1730,7 @@ int mtk_gmac_gephy_path_setup(struct mtk_eth *eth, int mac_id);
 int mtk_gmac_rgmii_path_setup(struct mtk_eth *eth, int mac_id);
 int mtk_gmac_usxgmii_path_setup(struct mtk_eth *eth, int mac_id);
 
-int mtk_eth_offload_init(struct mtk_eth *eth, u8 id);
+int mtk_eth_offload_init(struct mtk_eth *eth);
 int mtk_eth_setup_tc(struct net_device *dev, enum tc_setup_type type,
 		     void *type_data);
 int mtk_flow_offload_cmd(struct mtk_eth *eth, struct flow_cls_offload *cls,
