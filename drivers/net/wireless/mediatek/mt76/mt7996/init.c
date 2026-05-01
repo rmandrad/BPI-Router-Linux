@@ -1188,6 +1188,10 @@ static int mt7996_variant_type_init(struct mt7996_dev *dev)
 	}
 
 	dev->var.type = var_type;
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: variant type init chip=0x%x pad_gpio=0x%08x type=%u\n",
+		 mt76_chip(&dev->mt76), val, dev->var.type);
+
 	return 0;
 }
 
@@ -1229,6 +1233,11 @@ static int mt7996_variant_fem_init(struct mt7996_dev *dev)
 		dev->var.fem = MT7996_FEM_MIX;
 	else
 		dev->var.fem = MT7996_FEM_EXT;
+
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: variant fem init chip=0x%x pad_gpio=0x%08x adie_idx=%u adie_comb=%u adie_id=0x%04x adie_ver=0x%04x efuse_7976c=0x%02x is_7976c=%d fem=%u\n",
+		 mt76_chip(&dev->mt76), val, adie_idx, adie_comb, adie_id,
+		 adie_ver, buf[idx], is_7976c, dev->var.fem);
 
 	return 0;
 }
