@@ -672,7 +672,8 @@ mt7603_mac_fill_rx(struct mt7603_dev *dev, struct sk_buff *skb)
 	}
 
 	hdr = (struct ieee80211_hdr *)skb->data;
-	if (!status->wcid || !ieee80211_is_data_qos(hdr->frame_control))
+	status->wcid_idx = status->wcid ? status->wcid->idx : 0;
+	if (!status->wcid_idx || !ieee80211_is_data_qos(hdr->frame_control))
 		return 0;
 
 	status->aggr = unicast &&

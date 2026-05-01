@@ -108,7 +108,7 @@ static struct sk_buff *mt76_npu_dequeue(struct mt76_dev *dev,
 	}
 	q->tail = index;
 	q->queued -= i;
-	Q_WRITE(q, dma_idx, q->tail);
+	Q_WRITE(q, dma_idx, q->tail, MT_QUEUE_DMA_IDX);
 
 	return skb;
 }

@@ -532,7 +532,8 @@ mt7915_mac_fill_rx(struct mt7915_dev *dev, struct sk_buff *skb,
 	if (rxv && mode >= MT_PHY_TYPE_HE_SU && !(status->flag & RX_FLAG_8023))
 		mt76_connac2_mac_decode_he_radiotap(&dev->mt76, skb, rxv, mode);
 
-	if (!status->wcid || !ieee80211_is_data_qos(fc))
+	status->wcid_idx = status->wcid ? status->wcid->idx : 0;
+	if (!status->wcid_idx || !ieee80211_is_data_qos(fc))
 		return 0;
 
 	status->aggr = unicast &&

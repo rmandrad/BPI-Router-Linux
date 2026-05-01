@@ -191,17 +191,17 @@ mt76_dma_sync_idx(struct mt76_dev *dev, struct mt76_queue *q)
 {
 	if ((q->flags & MT_QFLAG_WED_RRO_EN) &&
 	    (!is_mt7992(dev) || !mt76_npu_device_active(dev)))
-		Q_WRITE(q, ring_size, MT_DMA_RRO_EN | q->ndesc);
+		Q_WRITE(q, ring_size, MT_DMA_RRO_EN | q->ndesc, MT_QUEUE_RING_SIZE);
 	else
-		Q_WRITE(q, ring_size, q->ndesc);
+		Q_WRITE(q, ring_size, q->ndesc, MT_QUEUE_RING_SIZE);
 
 	if (mt76_queue_is_npu_tx(q)) {
 		writel(q->ndesc, &q->regs->ring_size);
 		writel(q->desc_dma, &q->regs->desc_base);
 	}
 
-	Q_WRITE(q, desc_base, q->desc_dma);
-	q->head = Q_READ(q, dma_idx);
+	Q_WRITE(q, desc_base, q->desc_dma, MT_QUEUE_DESC_BASE);
+	q->head = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 	q->tail = q->head;
 }
 
@@ -225,8 +225,8 @@ void mt76_dma_queue_reset(struct mt76_dev *dev, struct mt76_queue *q,
 		if (mt76_queue_is_emi(q))
 			*q->emi_cpu_idx = 0;
 		else
-			Q_WRITE(q, cpu_idx, 0);
-		Q_WRITE(q, dma_idx, 0);
+			Q_WRITE(q, cpu_idx, 0, MT_QUEUE_CPU_IDX);
+		Q_WRITE(q, dma_idx, 0, GENMASK(31, 0));
 	}
 	mt76_dma_sync_idx(dev, q);
 }
@@ -403,7 +403,7 @@ mt76_dma_kick_queue(struct mt76_dev *dev, struct mt76_queue *q)
 	if (mt76_queue_is_emi(q))
 		*q->emi_cpu_idx = cpu_to_le16(q->head);
 	else
-		Q_WRITE(q, cpu_idx, q->head);
+		Q_WRITE(q, cpu_idx, q->head, MT_QUEUE_CPU_IDX);
 }
 
 static void
@@ -419,7 +419,7 @@ mt76_dma_tx_cleanup(struct mt76_dev *dev, struct mt76_queue *q, bool flush)
 	if (flush)
 		last = -1;
 	else
-		last = Q_READ(q, dma_idx);
+		last = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 
 	while (q->queued > 0 && q->tail != last) {
 		mt76_dma_tx_cleanup_idx(dev, q, q->tail, &entry);
@@ -432,7 +432,7 @@ mt76_dma_tx_cleanup(struct mt76_dev *dev, struct mt76_queue *q, bool flush)
 		}
 
 		if (!flush && q->tail == last)
-			last = Q_READ(q, dma_idx);
+			last = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 	}
 	spin_unlock_bh(&q->cleanup_lock);
 
@@ -984,7 +984,7 @@ mt76_dma_rx_process(struct mt76_dev *dev, struct mt76_queue *q, int budget)
 	if ((q->flags & MT_QFLAG_WED_RRO_EN) ||
 	    (IS_ENABLED(CONFIG_NET_MEDIATEK_SOC_WED) &&
 	     mt76_queue_is_wed_tx_free(q))) {
-		dma_idx = Q_READ(q, dma_idx);
+		dma_idx = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 		check_ddone = true;
 	}
 
@@ -994,7 +994,7 @@ mt76_dma_rx_process(struct mt76_dev *dev, struct mt76_queue *q, int budget)
 
 		if (check_ddone) {
 			if (q->tail == dma_idx)
-				dma_idx = Q_READ(q, dma_idx);
+				dma_idx = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 
 			if (q->tail == dma_idx)
 				break;

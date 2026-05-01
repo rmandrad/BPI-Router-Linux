@@ -638,7 +638,8 @@ static int mt7615_mac_fill_rx(struct mt7615_dev *dev, struct sk_buff *skb)
 		status->flag |= RX_FLAG_8023;
 	}
 
-	if (!status->wcid || !ieee80211_is_data_qos(fc))
+	status->wcid_idx = status->wcid ? status->wcid->idx : 0;
+	if (!status->wcid_idx || !ieee80211_is_data_qos(fc))
 		return 0;
 
 	status->aggr = unicast &&

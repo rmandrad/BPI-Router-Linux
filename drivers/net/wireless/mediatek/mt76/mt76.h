@@ -225,6 +225,11 @@ struct mt76_queue_entry {
 	bool done:1;
 };
 
+#define MT_QUEUE_DESC_BASE	GENMASK(31, 0)
+#define MT_QUEUE_RING_SIZE	GENMASK(15, 0)
+#define MT_QUEUE_CPU_IDX	GENMASK(11, 0)
+#define MT_QUEUE_DMA_IDX	GENMASK(11, 0)
+
 struct mt76_queue_regs {
 	u32 desc_base;
 	u32 ring_size;
@@ -1793,7 +1798,8 @@ void mt76_rx_complete(struct mt76_dev *dev, struct sk_buff_head *frames,
 		      struct napi_struct *napi);
 void mt76_rx_poll_complete(struct mt76_dev *dev, enum mt76_rxq_id q,
 			   struct napi_struct *napi);
-void mt76_rx_aggr_reorder(struct sk_buff *skb, struct sk_buff_head *frames);
+void mt76_rx_aggr_reorder(struct mt76_dev *dev, struct sk_buff *skb,
+			  struct sk_buff_head *frames);
 void mt76_testmode_tx_pending(struct mt76_phy *phy);
 void mt76_queue_tx_complete(struct mt76_dev *dev, struct mt76_queue *q,
 			    struct mt76_queue_entry *e);
