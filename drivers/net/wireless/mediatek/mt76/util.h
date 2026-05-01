@@ -21,6 +21,7 @@ struct mt76_worker
 enum {
 	MT76_WORKER_SCHEDULED,
 	MT76_WORKER_RUNNING,
+	MT76_WORKER_DISABLED,
 };
 
 #define MT76_INCR(_var, _size) \
@@ -90,8 +91,11 @@ static inline void mt76_worker_disable(struct mt76_worker *w)
 	if (!w->task)
 		return;
 
+	if (test_and_set_bit(MT76_WORKER_DISABLED, &w->state))
+		return;
+
 	kthread_park(w->task);
-	WRITE_ONCE(w->state, 0);
+	WRITE_ONCE(w->state, BIT(MT76_WORKER_DISABLED));
 }
 
 static inline void mt76_worker_enable(struct mt76_worker *w)
@@ -100,6 +104,7 @@ static inline void mt76_worker_enable(struct mt76_worker *w)
 		return;
 
 	kthread_unpark(w->task);
+	clear_bit(MT76_WORKER_DISABLED, &w->state);
 	mt76_worker_schedule(w);
 }
 

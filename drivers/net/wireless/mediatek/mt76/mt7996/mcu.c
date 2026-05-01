@@ -1579,7 +1579,7 @@ mt7996_mcu_sta_amsdu_tlv(struct mt7996_dev *dev, struct sk_buff *skb,
 
 	tlv = mt76_connac_mcu_add_tlv(skb, STA_REC_HW_AMSDU, sizeof(*amsdu));
 	amsdu = (struct sta_rec_amsdu *)tlv;
-	amsdu->max_amsdu_num = 8;
+	amsdu->max_amsdu_num = 31;
 	amsdu->amsdu_en = true;
 	msta_link->wcid.amsdu = true;
 
@@ -3136,11 +3136,12 @@ int mt7996_mcu_beacon_inband_discov(struct mt7996_dev *dev,
 	if (changed & BSS_CHANGED_FILS_DISCOVERY &&
 	    link_conf->fils_discovery.max_interval) {
 		interval = link_conf->fils_discovery.max_interval;
-		skb = ieee80211_get_fils_discovery_tmpl(hw, vif);
+		skb = ieee80211_get_fils_discovery_tmpl(hw, vif, link_conf->link_id);
 	} else if (changed & BSS_CHANGED_UNSOL_BCAST_PROBE_RESP &&
 		   link_conf->unsol_bcast_probe_resp_interval) {
 		interval = link_conf->unsol_bcast_probe_resp_interval;
-		skb = ieee80211_get_unsol_bcast_probe_resp_tmpl(hw, vif);
+		skb = ieee80211_get_unsol_bcast_probe_resp_tmpl(hw, vif,
+								link_conf->link_id);
 	}
 
 	if (!skb) {
@@ -5043,6 +5044,24 @@ int mt7996_mcu_wtbl_update_hdr_trans(struct mt7996_dev *dev,
 
 	/* starec hdr trans */
 	mt7996_mcu_sta_hdr_trans_tlv(dev, skb, vif, &msta_link->wcid);
+	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
+				     MCU_WMWA_UNI_CMD(STA_REC_UPDATE), true);
+}
+
+int mt7996_mcu_ps_leave(struct mt7996_dev *dev, struct mt7996_vif_link *mconf,
+			struct mt7996_sta_link *msta_link)
+{
+	struct sk_buff *skb;
+
+	skb = __mt76_connac_mcu_alloc_sta_req(&dev->mt76, &mconf->mt76,
+					      &msta_link->wcid,
+					      MT7996_STA_UPDATE_MAX_SIZE);
+	if (IS_ERR(skb))
+		return PTR_ERR(skb);
+
+	mt76_connac_mcu_add_tlv(skb, STA_REC_PS_LEAVE,
+				sizeof(struct sta_rec_ps_leave));
+
 	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
 				     MCU_WMWA_UNI_CMD(STA_REC_UPDATE), true);
 }

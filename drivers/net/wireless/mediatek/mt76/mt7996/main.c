@@ -972,7 +972,7 @@ mt7996_link_info_changed(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	 * and then peer references bss_info_rfch to set bandwidth cap.
 	 */
 	if ((changed & BSS_CHANGED_BSSID && !is_zero_ether_addr(info->bssid)) ||
-	    (changed & BSS_CHANGED_BEACON_ENABLED && info->enable_beacon)) {
+	    (changed & BSS_CHANGED_BEACON_ENABLED)) {
 		mt7996_mcu_add_bss_info(phy, vif, info, &link->mt76,
 					&link->msta_link, true);
 		mt7996_mcu_add_sta(dev, info, NULL, link, NULL,
@@ -2027,6 +2027,9 @@ static void mt7996_sta_set_4addr(struct ieee80211_hw *hw,
 			continue;
 
 		mt7996_mcu_wtbl_update_hdr_trans(dev, vif, link, msta_link);
+
+		if (msta->deflink_id != link_id && is_mt7996(&dev->mt76))
+			mt7996_mcu_ps_leave(dev, link, msta_link);
 	}
 
 	mutex_unlock(&dev->mt76.mutex);

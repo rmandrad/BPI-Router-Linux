@@ -5838,18 +5838,40 @@ out:
 }
 EXPORT_SYMBOL(ieee80211_proberesp_get);
 
+static struct ieee80211_link_data *
+ieee80211_get_tmpl_link(struct ieee80211_sub_if_data *sdata,
+			unsigned int link_id)
+{
+	if (!ieee80211_vif_is_mld(&sdata->vif) ||
+	    link_id == IEEE80211_LINK_UNSPECIFIED)
+		return &sdata->deflink;
+
+	if (link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
+		return NULL;
+
+	return rcu_dereference(sdata->link[link_id]);
+}
+
 struct sk_buff *ieee80211_get_fils_discovery_tmpl(struct ieee80211_hw *hw,
-						  struct ieee80211_vif *vif)
+						  struct ieee80211_vif *vif,
+						  unsigned int link_id)
 {
 	struct sk_buff *skb = NULL;
 	struct fils_discovery_data *tmpl = NULL;
 	struct ieee80211_sub_if_data *sdata = vif_to_sdata(vif);
+	struct ieee80211_link_data *link;
 
 	if (sdata->vif.type != NL80211_IFTYPE_AP)
 		return NULL;
 
 	rcu_read_lock();
-	tmpl = rcu_dereference(sdata->deflink.u.ap.fils_discovery);
+	link = ieee80211_get_tmpl_link(sdata, link_id);
+	if (!link) {
+		rcu_read_unlock();
+		return NULL;
+	}
+
+	tmpl = rcu_dereference(link->u.ap.fils_discovery);
 	if (!tmpl) {
 		rcu_read_unlock();
 		return NULL;
@@ -5868,17 +5890,25 @@ EXPORT_SYMBOL(ieee80211_get_fils_discovery_tmpl);
 
 struct sk_buff *
 ieee80211_get_unsol_bcast_probe_resp_tmpl(struct ieee80211_hw *hw,
-					  struct ieee80211_vif *vif)
+					  struct ieee80211_vif *vif,
+					  unsigned int link_id)
 {
 	struct sk_buff *skb = NULL;
 	struct unsol_bcast_probe_resp_data *tmpl = NULL;
 	struct ieee80211_sub_if_data *sdata = vif_to_sdata(vif);
+	struct ieee80211_link_data *link;
 
 	if (sdata->vif.type != NL80211_IFTYPE_AP)
 		return NULL;
 
 	rcu_read_lock();
-	tmpl = rcu_dereference(sdata->deflink.u.ap.unsol_bcast_probe_resp);
+	link = ieee80211_get_tmpl_link(sdata, link_id);
+	if (!link) {
+		rcu_read_unlock();
+		return NULL;
+	}
+
+	tmpl = rcu_dereference(link->u.ap.unsol_bcast_probe_resp);
 	if (!tmpl) {
 		rcu_read_unlock();
 		return NULL;

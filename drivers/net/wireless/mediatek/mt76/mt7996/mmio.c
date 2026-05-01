@@ -614,6 +614,7 @@ int mt7996_mmio_wed_init(struct mt7996_dev *dev, void *pdev_ptr,
 
 	if (mtk_wed_device_attach(wed)) {
 		dev->mt76.hwrro_mode = MT76_HWRRO_OFF;
+		wed_enable = false;
 		return 0;
 	}
 
