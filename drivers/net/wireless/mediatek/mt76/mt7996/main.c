@@ -1176,8 +1176,6 @@ mt7996_mac_sta_init_link(struct mt7996_dev *dev,
 	rcu_assign_pointer(msta->link[link_id], msta_link);
 
 	mt7996_mac_wtbl_update(dev, idx, MT_WTBL_UPDATE_ADM_COUNT_CLEAR);
-	mt7996_mcu_add_sta(dev, link_conf, link_sta, link, msta_link,
-			   CONN_STATE_DISCONNECT, true);
 
 	rcu_assign_pointer(dev->mt76.wcid[idx], &msta_link->wcid);
 	mt76_wcid_init(&msta_link->wcid, phy->mt76->band_idx);

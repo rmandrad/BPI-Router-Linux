@@ -62,7 +62,7 @@ static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 	int i;
 
 	wcid = mt76_wcid_ptr(dev, idx);
-	if (!wcid || !wcid->sta)
+	if (!wcid || wcid == &dev->mt76.global_wcid)
 		return NULL;
 
 	if (!mt7996_band_valid(dev, band_idx))
