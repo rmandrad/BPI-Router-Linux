@@ -1628,6 +1628,11 @@ mt7996_ampdu_action(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 
 	switch (params->action) {
 	case IEEE80211_AMPDU_RX_START:
+		if (msta->stop_rx_ba_in_progress) {
+			ret = -EAGAIN;
+			break;
+		}
+
 		/* Since packets belonging to the same TID can be split over
 		 * multiple links, store the AMPDU state for reordering in the
 		 * primary link
@@ -1638,7 +1643,12 @@ mt7996_ampdu_action(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		break;
 	case IEEE80211_AMPDU_RX_STOP:
 		mt76_rx_aggr_stop(&dev->mt76, &msta->deflink.wcid, tid);
+		if (mt7996_has_hwrro(dev))
+			msta->stop_rx_ba_in_progress = true;
+
 		ret = mt7996_mcu_add_rx_ba(dev, params, vif, false);
+		if (ret)
+			msta->stop_rx_ba_in_progress = false;
 		break;
 	case IEEE80211_AMPDU_TX_OPERATIONAL:
 		mtxq->aggr = true;

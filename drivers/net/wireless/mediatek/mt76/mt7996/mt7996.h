@@ -255,6 +255,8 @@ struct mt7996_sta {
 	u8 seclink_id;
 
 	struct mt7996_vif *vif;
+
+	bool stop_rx_ba_in_progress;
 };
 
 struct mt7996_vif_link {
@@ -311,6 +313,7 @@ struct mt7996_wed_rro_addr {
 struct mt7996_wed_rro_session_id {
 	struct list_head list;
 	u16 id;
+	u16 wcid;
 };
 
 struct mt7996_msdu_page {

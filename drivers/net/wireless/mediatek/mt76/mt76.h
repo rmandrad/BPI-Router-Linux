@@ -36,6 +36,7 @@
 #define MT_QFLAG_WED_RRO_EN	BIT(7)
 #define MT_QFLAG_EMI_EN		BIT(8)
 #define MT_QFLAG_NPU		BIT(9)
+#define MT_QFLAG_CHECK_DDONE	BIT(10)
 
 #define __MT_WED_Q(_type, _n)	(MT_QFLAG_WED | \
 				 FIELD_PREP(MT_QFLAG_WED_TYPE, _type) | \
@@ -2050,6 +2051,7 @@ mt76_token_release(struct mt76_dev *dev, int token, bool *wake);
 int mt76_token_consume(struct mt76_dev *dev, struct mt76_txwi_cache **ptxwi);
 void __mt76_set_tx_blocked(struct mt76_dev *dev, bool blocked);
 struct mt76_txwi_cache *mt76_rx_token_release(struct mt76_dev *dev, int token);
+struct mt76_txwi_cache *mt76_rx_token_find(struct mt76_dev *dev, int token);
 int mt76_rx_token_consume(struct mt76_dev *dev, void *ptr,
 			  struct mt76_txwi_cache *r, dma_addr_t phys);
 int mt76_create_page_pool(struct mt76_dev *dev, struct mt76_queue *q);

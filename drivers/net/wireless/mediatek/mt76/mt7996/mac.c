@@ -111,6 +111,17 @@ u32 mt7996_mac_wtbl_lmac_addr(struct mt7996_dev *dev, u16 wcid, u8 dw)
 	return MT_WTBL_LMAC_OFFS(wcid, dw);
 }
 
+static void mt7996_refresh_tx_agg_session_timer(struct ieee80211_sta *sta)
+{
+	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
+	u8 tid;
+
+	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
+		if (test_bit(tid, &msta->deflink.wcid.ampdu_state))
+			ieee80211_refresh_tx_agg_session_timer(sta, tid);
+	}
+}
+
 static void mt7996_mac_sta_poll(struct mt7996_dev *dev)
 {
 	static const u8 ac_to_tid[] = {
@@ -186,6 +197,8 @@ static void mt7996_mac_sta_poll(struct mt7996_dev *dev)
 
 		sta = container_of((void *)msta, struct ieee80211_sta,
 				   drv_priv);
+		mt7996_refresh_tx_agg_session_timer(sta);
+
 		for (i = 0; i < IEEE80211_NUM_ACS; i++) {
 			u8 q = mt76_connac_lmac_mapping(i);
 			u32 tx_cur = tx_time[q];

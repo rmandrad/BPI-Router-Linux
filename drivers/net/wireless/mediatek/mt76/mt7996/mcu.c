@@ -746,6 +746,7 @@ mt7996_mcu_wed_rro_event(struct mt7996_dev *dev, struct sk_buff *skb)
 				break;
 
 			session->id = le16_to_cpu(e->session_id);
+			session->wcid = le16_to_cpu(e->mld_id);
 
 			spin_lock_bh(&dev->wed_rro.lock);
 			list_add_tail(&session->list, &dev->wed_rro.poll_list);

@@ -422,6 +422,10 @@ mt76_dma_tx_cleanup(struct mt76_dev *dev, struct mt76_queue *q, bool flush)
 		last = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 
 	while (q->queued > 0 && q->tail != last) {
+		if ((q->flags & MT_QFLAG_CHECK_DDONE) &&
+		    !(q->desc[q->tail].ctrl & cpu_to_le32(MT_DMA_CTL_DMA_DONE)))
+			break;
+
 		mt76_dma_tx_cleanup_idx(dev, q, q->tail, &entry);
 		mt76_npu_txdesc_cleanup(q, q->tail);
 		mt76_queue_tx_complete(dev, q, &entry);
@@ -520,7 +524,24 @@ mt76_dma_get_buf(struct mt76_dev *dev, struct mt76_queue *q, int idx,
 
 	if (mt76_queue_is_wed_rx(q)) {
 		u32 token = FIELD_GET(MT_DMA_CTL_TOKEN, buf1);
-		struct mt76_txwi_cache *t = mt76_rx_token_release(dev, token);
+		struct mt76_txwi_cache *t;
+		int id;
+
+		t = mt76_rx_token_find(dev, token);
+		if (*more && (!t || t->dma_addr != le32_to_cpu(desc->buf0))) {
+			spin_lock_bh(&dev->rx_token_lock);
+
+			idr_for_each_entry(&dev->rx_token, t, id) {
+				if (t->dma_addr == le32_to_cpu(desc->buf0)) {
+					token = id;
+					break;
+				}
+			}
+
+			spin_unlock_bh(&dev->rx_token_lock);
+		}
+
+		t = mt76_rx_token_release(dev, token);
 
 		if (!t)
 			return NULL;

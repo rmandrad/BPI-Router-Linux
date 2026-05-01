@@ -1156,6 +1156,21 @@ reset:
 		}
 reset_session:
 		mt7996_mcu_wed_rro_reset_sessions(dev, e->id);
+
+		if (is_mt7996(&dev->mt76)) {
+			struct ieee80211_sta *sta;
+			struct mt7996_sta *msta;
+			struct mt76_wcid *wcid;
+
+			rcu_read_lock();
+			wcid = mt76_wcid_ptr(dev, e->wcid);
+			sta = wcid_to_sta(wcid);
+			if (sta) {
+				msta = (struct mt7996_sta *)sta->drv_priv;
+				msta->stop_rx_ba_in_progress = false;
+			}
+			rcu_read_unlock();
+		}
 out:
 		kfree(e);
 	}

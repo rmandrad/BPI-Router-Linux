@@ -935,3 +935,16 @@ mt76_rx_token_release(struct mt76_dev *dev, int token)
 	return t;
 }
 EXPORT_SYMBOL_GPL(mt76_rx_token_release);
+
+struct mt76_txwi_cache *
+mt76_rx_token_find(struct mt76_dev *dev, int token)
+{
+	struct mt76_txwi_cache *t;
+
+	spin_lock_bh(&dev->rx_token_lock);
+	t = idr_find(&dev->rx_token, token);
+	spin_unlock_bh(&dev->rx_token_lock);
+
+	return t;
+}
+EXPORT_SYMBOL_GPL(mt76_rx_token_find);
