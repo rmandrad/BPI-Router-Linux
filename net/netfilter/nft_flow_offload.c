@@ -7,6 +7,7 @@
 #include <linux/netfilter.h>
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
+#include <linux/ipv6.h>
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/nf_tables.h>
 #include <net/ip.h>
@@ -59,6 +60,7 @@ static void nft_flow_offload_eval(const struct nft_expr *expr,
 	struct flow_offload *flow;
 	enum ip_conntrack_dir dir;
 	struct nf_conn *ct;
+	u32 thoff;
 	int ret;
 
 	if (nft_flow_offload_skip(pkt->skb, nft_pf(pkt)))
@@ -70,8 +72,16 @@ static void nft_flow_offload_eval(const struct nft_expr *expr,
 
 	switch (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.dst.protonum) {
 	case IPPROTO_TCP:
-		tcph = skb_header_pointer(pkt->skb, nft_thoff(pkt),
-					  sizeof(_tcph), &_tcph);
+		thoff = nft_thoff(pkt);
+		if (!thoff) {
+			if (pkt->skb->protocol == htons(ETH_P_IP))
+				thoff = ip_hdrlen(pkt->skb);
+			else if (pkt->skb->protocol == htons(ETH_P_IPV6))
+				thoff = sizeof(struct ipv6hdr);
+		}
+
+		tcph = skb_header_pointer(pkt->skb, thoff, sizeof(_tcph),
+					  &_tcph);
 		if (unlikely(!tcph || tcph->fin || tcph->rst ||
 			     !nf_conntrack_tcp_established(ct)))
 			goto out;

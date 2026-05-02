@@ -28,9 +28,12 @@
 #define MTK_DSA_PORT_MASK	GENMASK(2, 0)
 
 #define MTK_QDMA_NUM_QUEUES	16
+#define MTK_QDMA_QUEUE_MASK	((1ULL << MTK_QDMA_NUM_QUEUES) - 1)
 #define MTK_QDMA_PAGE_SIZE	2048
 #define MTK_MAX_RX_LENGTH	1536
+#define MTK_MAX_RX_LENGTH_UNIT	1024
 #define MTK_MAX_RX_LENGTH_2K	2048
+#define MTK_MAX_RX_LENGTH_9K	9216
 #define MTK_TX_DMA_BUF_LEN	0x3fff
 #define MTK_TX_DMA_BUF_LEN_V2	0xffff
 #define MTK_MIN_TX_LENGTH	60
@@ -68,7 +71,7 @@
 
 #define MTK_MAX_RX_RING_NUM	(8)
 #define MTK_HW_LRO_DMA_SIZE(eth)	(mtk_is_netsys_v3_or_greater(eth) ? 64 : 8)
-#define	MTK_MAX_LRO_RX_LENGTH		(4096 * 3 + MTK_MAX_RX_LENGTH)
+#define	MTK_MAX_LRO_RX_LENGTH(eth)	(4096 * 3 + (eth)->rx_buf_len)
 #define	MTK_MAX_LRO_IP_CNT		2
 #define	MTK_HW_LRO_TIMER_UNIT		1	/* 20 us */
 #define	MTK_HW_LRO_REFRESH_TIME		50000	/* 1 sec. */
@@ -82,7 +85,7 @@
 #define MTK_RSS_MAX_INDIRECTION_TABLE	128
 
 /* Frame Engine Global Configuration */
-#define MTK_FE_GLO_CFG(x)	(((x) == MTK_GMAC3_ID) ? 0x24 : 0x00)
+#define MTK_FE_GLO_CFG(x)	(((x) >= 8) ? 0x24 : 0x00)
 #define MTK_FE_LINK_DOWN_P(x)	BIT(((x) + 8) % 16)
 
 /* Frame Engine Global Reset Register */
@@ -90,7 +93,8 @@
 #define RST_GL_PSE		BIT(0)
 
 /* Frame Engine Interrupt Status Register */
-#define MTK_INT_STATUS2		0x08
+#define MTK_FE_INT_STATUS	0x08
+#define MTK_INT_STATUS2		MTK_FE_INT_STATUS
 #define MTK_FE_INT_ENABLE	0x0c
 #define MTK_FE_INT_FQ_EMPTY	BIT(8)
 #define MTK_FE_INT_TSO_FAIL	BIT(12)
@@ -108,6 +112,14 @@
 
 /* Frame Engine Interrupt Grouping Register */
 #define MTK_FE_INT_GRP		0x20
+
+/* Frame Engine Interrupt Status 2 Register */
+#define MTK_FE_INT_STATUS2	0x28
+
+/* Frame Engine LRO Auto-Learn Table Information */
+#define MTK_FE_ALT_CF8		0x300
+#define MTK_FE_ALT_SGL_CFC	0x304
+#define MTK_FE_ALT_SEQ_CFC	0x308
 
 /* CDMP Ingress Control Register */
 #define MTK_CDMQ_IG_CTRL	0x1400
@@ -133,6 +145,7 @@
 #define MTK_GDMA_STRP_CRC	BIT(16)
 #define MTK_GDMA_TO_PDMA	0x0
 #define MTK_GDMA_DROP_ALL       0x7777
+#define MTK_GDMA_TO_TDMA	0xaaaa
 
 /* GDM Egress Control Register */
 #define MTK_GDMA_EG_CTRL(x)	({ typeof(x) _x = (x); (_x == MTK_GMAC3_ID) ?	\
@@ -223,7 +236,14 @@
 #define MTK_RSS_HASH_KEY_DW(reg_map, x)		((reg_map)->pdma.rss_glo_cfg + \
 						0x20 + ((x) * 0x4))
 #define MTK_RSS_INDR_TABLE_DW(reg_map, x)	((reg_map)->pdma.rss_glo_cfg + \
-						0x50 + ((x) * 0x4))
+						 0x50 + ((x) * 0x4))
+
+/* PDMA HW LRO ALT Debug Registers */
+#define MTK_LRO_ALT_DBG		0xc40
+#define MTK_LRO_ALT_INDEX_OFFSET	8
+
+/* PDMA HW LRO ALT Data Registers */
+#define MTK_LRO_ALT_DBG_DATA	0xc44
 
 /* PDMA Global Configuration Register */
 #define MTK_PDMA_LRO_SDL	0x3000
@@ -270,6 +290,26 @@
 #define MTK_RING_MAX_AGG_TIME		((MTK_HW_LRO_AGG_TIME & 0xffff) << 10)
 #define MTK_RING_MAX_AGG_CNT_L		((MTK_HW_LRO_MAX_AGG_CNT & 0x3f) << 26)
 #define MTK_RING_MAX_AGG_CNT_H		((MTK_HW_LRO_MAX_AGG_CNT >> 6) & 0x3)
+
+/* PDMA HW LRO Ring Control Mask */
+#define MTK_LRO_RING_AGG_CNT_H_MASK	GENMASK(1, 0)
+#define MTK_LRO_RING_AGG_TIME_MASK	GENMASK(25, 10)
+#define MTK_LRO_RING_AGG_CNT_L_MASK	GENMASK(31, 26)
+#define MTK_LRO_RING_AGE_TIME_H_MASK	GENMASK(5, 0)
+#define MTK_LRO_RING_AGE_TIME_L_MASK	GENMASK(31, 22)
+
+/* PDMA HW LRO Ring Control 1 Offsets */
+#define MTK_LRO_RING_AGE_TIME_L_OFFSET	22
+
+/* PDMA HW LRO Ring Control 2 Offsets */
+#define MTK_LRO_RING_AGE_TIME_H_OFFSET	0
+#define MTK_LRO_RING_RX_MODE_OFFSET	6
+#define MTK_LRO_RING_RX_PORT_VLD_OFFSET	8
+#define MTK_LRO_RING_AGG_TIME_OFFSET	10
+#define MTK_LRO_RING_AGG_CNT_L_OFFSET	26
+
+/* PDMA HW LRO Ring Control 3 Offsets */
+#define MTK_LRO_RING_AGG_CNT_H_OFFSET	0
 
 /* QDMA TX Queue Configuration Registers */
 #define MTK_QTX_OFFSET		0x10
@@ -351,10 +391,11 @@
 #define MTK_TX_DONE_INT0	BIT(0)
 #define MTK_TX_DONE_INT		MTK_TX_DONE_DLY
 
-#define MTK_CDM_TXFIFO_RDY	BIT(7)
-
 /* QDMA Interrupt grouping registers */
 #define MTK_RLS_DONE_INT	BIT(0)
+
+/* QDMA Page Configuration Register */
+#define MTK_QTX_PER_PAGE	16
 
 /* QDMA TX NUM */
 #define QID_BITS_V2(x)		(((x) & 0x3f) << 16)
@@ -442,6 +483,10 @@
 #define RX_DMA_L4_VALID_PDMA	BIT(30)		/* when PDMA is used */
 #define RX_DMA_SPECIAL_TAG	BIT(22)
 
+/* PDMA descriptor rxd2 */
+#define RX_DMA_GET_AGG_CNT	GENMASK(9, 2)
+#define RX_DMA_GET_REV		GENMASK(15, 10)
+
 /* PDMA descriptor rxd5 */
 #define MTK_RXD5_FOE_ENTRY	GENMASK(14, 0)
 #define MTK_RXD5_PPE_CPU_REASON	GENMASK(22, 18)
@@ -453,6 +498,10 @@
 /* PDMA V2 descriptor rxd3 */
 #define RX_DMA_VTAG_V2		BIT(0)
 #define RX_DMA_L4_VALID_V2	BIT(2)
+
+/* PDMA V2 descriptor rxd6 */
+#define RX_DMA_GET_FLUSH_RSN_V2	GENMASK(2, 0)
+#define RX_DMA_GET_AGG_CNT_V2	GENMASK(23, 16)
 
 #define MTK_TDMA_GLO_CFG	0x6204
 
@@ -507,12 +556,18 @@
 
 /* Mac control registers */
 #define MTK_MAC_MCR(x)		(0x10100 + (x * 0x100))
+#define MAC_MCR_MAX_RX_JUMBO_MASK	GENMASK(31, 28)
+#define MAC_MCR_MAX_RX_JUMBO(x)	FIELD_PREP(MAC_MCR_MAX_RX_JUMBO_MASK, (x))
 #define MAC_MCR_MAX_RX_MASK	GENMASK(25, 24)
 #define MAC_MCR_MAX_RX(_x)	(MAC_MCR_MAX_RX_MASK & ((_x) << 24))
 #define MAC_MCR_MAX_RX_1518	0x0
 #define MAC_MCR_MAX_RX_1536	0x1
 #define MAC_MCR_MAX_RX_1552	0x2
 #define MAC_MCR_MAX_RX_2048	0x3
+
+/* XFI Mac RX configuration 2 registers */
+#define MTK_XMAC_RX_CFG2(x)	(MTK_XMAC_MCR(x) + 0xd0)
+#define MTK_XMAC_MAX_RX_MASK	GENMASK(13, 0)
 #define MAC_MCR_IPG_CFG		(BIT(18) | BIT(16))
 #define MAC_MCR_FORCE_MODE	BIT(15)
 #define MAC_MCR_TX_EN		BIT(14)
@@ -698,6 +753,10 @@
 #define MT7628_SDM_MAC_ADRL	(MT7628_SDM_OFFSET + 0x0c)
 #define MT7628_SDM_MAC_ADRH	(MT7628_SDM_OFFSET + 0x10)
 
+/* MT7988 internal switch register */
+#define MT753X_PMCR_P(x)	(0x3000 + ((x) * 0x100))
+#define PMCR_FORCE_LNK		BIT(0)
+
 /* Counter / stat register */
 #define MT7628_SDM_TPCNT	(MT7628_SDM_OFFSET + 0x100)
 #define MT7628_SDM_TBCNT	(MT7628_SDM_OFFSET + 0x104)
@@ -720,6 +779,12 @@
 #define MTK_FE_DROP_FQ		0x244
 #define MTK_FE_DROP_FC		0x248
 #define MTK_FE_DROP_PPE		0x24C
+
+#define MTK_FE_CDMW_FSM(x)	(((x) == 0) ? MTK_FE_CDM3_FSM : \
+				 ((x) == 1) ? MTK_FE_CDM4_FSM : MTK_FE_CDM5_FSM)
+
+#define MTK_FE_GDM_FSM(x)	(((x) == 0) ? MTK_FE_GDM1_FSM : \
+				 ((x) == 1) ? MTK_FE_GDM2_FSM : MTK_FE_GDM3_FSM)
 
 #define MTK_MAC_FSM(x)		(0x1010C + ((x) * 0x100))
 
@@ -980,6 +1045,15 @@ enum mtk_pse_port {
 	PSE_PORT_MAX
 };
 
+#define PSE_GDM_PORT(x)		(((x) == 0) ? PSE_GDM1_PORT : \
+				 ((x) == 1) ? PSE_GDM2_PORT : PSE_GDM3_PORT)
+
+#define PSE_PPE_PORT(x)		(((x) == 0) ? PSE_PPE0_PORT : \
+				 ((x) == 1) ? PSE_PPE1_PORT : PSE_PPE2_PORT)
+
+#define PSE_WDMA_PORT(x)	(((x) == 0) ? PSE_WDMA0_PORT : \
+				 ((x) == 1) ? PSE_WDMA1_PORT : PSE_WDMA2_PORT)
+
 /* GMAC Identifier */
 enum mtk_gmac_id {
 	MTK_GMAC1_ID = 0,
@@ -1034,6 +1108,7 @@ struct mtk_tx_ring {
 	u32 last_free_ptr;
 	u16 thresh;
 	atomic_t free_count;
+	atomic_t full_count;
 	int dma_size;
 	struct mtk_tx_dma *dma_pdma;	/* For MT7628/88 PDMA handling */
 	dma_addr_t phys_pdma;
@@ -1096,6 +1171,19 @@ struct mtk_napi {
 	struct mtk_rx_ring	*rx_ring;
 };
 
+struct mtk_qdma_params {
+	u32	qtx_cfg[MTK_QDMA_NUM_QUEUES];
+	u32	qtx_sch[MTK_QDMA_NUM_QUEUES];
+	u32	tx_sch[2];
+};
+
+struct mtk_qdma_shaper {
+	spinlock_t	lock;
+	atomic_t	refcnt[MTK_QDMA_NUM_QUEUES];
+	u32		speed[MTK_QDMA_NUM_QUEUES];
+	u32		threshold;
+};
+
 enum mkt_eth_capabilities {
 	MTK_RGMII_BIT = 0,
 	MTK_TRGMII_BIT,
@@ -1120,6 +1208,7 @@ enum mkt_eth_capabilities {
 	MTK_SRAM_BIT,
 	MTK_XGMAC_BIT,
 	MTK_XGMAC_V2_BIT,
+	MTK_NETSYS_RX_9K_BIT,
 	MTK_36BIT_DMA_BIT,
 
 	/* MUX BITS*/
@@ -1171,6 +1260,7 @@ enum mkt_eth_capabilities {
 #define MTK_SRAM		BIT_ULL(MTK_SRAM_BIT)
 #define MTK_XGMAC		BIT_ULL(MTK_XGMAC_BIT)
 #define MTK_XGMAC_V2		BIT_ULL(MTK_XGMAC_V2_BIT)
+#define MTK_NETSYS_RX_9K	BIT_ULL(MTK_NETSYS_RX_9K_BIT)
 #define MTK_36BIT_DMA	BIT_ULL(MTK_36BIT_DMA_BIT)
 
 #define MTK_ETH_MUX_GDM1_TO_GMAC1_ESW		\
@@ -1292,7 +1382,7 @@ enum mkt_eth_capabilities {
 		      MTK_MUX_GMAC123_TO_GEPHY_SGMII | \
 		      MTK_MUX_GMAC123_TO_USXGMII | MTK_MUX_GMAC2_TO_2P5GPHY | \
 		      MTK_QDMA | MTK_RSTCTRL_PPE1 | MTK_RSTCTRL_PPE2 | MTK_SRAM | \
-		      MTK_PDMA_INT | MTK_RSS | MTK_HWLRO)
+		      MTK_PDMA_INT | MTK_RSS | MTK_HWLRO | MTK_NETSYS_RX_9K)
 
 struct mtk_tx_dma_desc_info {
 	dma_addr_t	addr;
@@ -1479,6 +1569,7 @@ struct mtk_eth {
 	struct device			*dev;
 	struct device			*dma_dev;
 	void __iomem			*base;
+	void __iomem			*esw_base;
 	struct gen_pool			*sram_pool;
 	spinlock_t			page_lock;
 	spinlock_t			tx_irq_lock;
@@ -1504,8 +1595,11 @@ struct mtk_eth {
 	struct napi_struct		tx_napi;
 	struct mtk_napi			rx_napi[MTK_RX_NAPI_NUM];
 	struct mtk_rss_params		rss_params;
+	struct mtk_qdma_params		qdma_params;
+	struct mtk_qdma_shaper		qdma_shaper;
 	void				*scratch_ring;
 	dma_addr_t			phy_scratch_ring;
+	bool				scratch_ring_in_sram;
 	void				*scratch_head[MTK_FQ_DMA_HEAD];
 	struct clk			*clks[MTK_CLK_MAX];
 
@@ -1518,6 +1612,7 @@ struct mtk_eth {
 
 	spinlock_t			dim_lock;
 
+	u32				rx_buf_len;
 	u32				rx_events;
 	u32				rx_packets;
 	u32				rx_bytes;
@@ -1533,24 +1628,35 @@ struct mtk_eth {
 	struct metadata_dst		*dsa_meta[MTK_MAX_DSA_PORTS];
 
 	u8				debug_level;
+	u8				l4s_toggle;
 	struct mtk_ppe			*ppe[3];
 	struct rhashtable		flow_table;
 	struct socket			*ppe_roam_sock;
 	struct work_struct		ppe_roam_work;
 	unsigned char			ppe_roam_buf[1024];
 
+	struct xlat464_cfg		*xlat464;
+
 	struct bpf_prog			__rcu *prog;
 
 	struct {
 		struct delayed_work monitor_work;
-		u32 wdidx;
-		u8 wdma_hang_count;
+		atomic_t force;
+		u32 wdidx[3];
+		u32 adidx[4];
+		u32 gdm_txgp_cnt[3];
+		u32 gdm_rxgp_cnt[3];
+		u32 gdm_rxfc_cnt[3];
+		u32 gdm_txfsm[3];
+		u32 gdm_rxfsm[3];
+		u32 cdma_rxfsm;
+		u8 wdma_hang_count[3];
 		u8 qdma_hang_count;
 		u8 adma_hang_count;
-		u8 tdma_rx_hang_count;
-		u8 tdma_tx_hang_count;
-		u32 pre_ipq10;
-		u32 pre_fsm;
+		u8 mac_tx_hang_count[3];
+		u8 mac_rx_hang_count[3];
+		u8 gdm_tx_hang_count[3];
+		u8 gdm_rx_hang_count[3];
 	} reset;
 };
 
@@ -1564,9 +1670,13 @@ struct mtk_eth {
  */
 struct mtk_mac {
 	int				id;
+	unsigned int			mode;
 	phy_interface_t			interface;
 	u8				ppe_idx;
 	int				speed;
+	int				duplex;
+	bool				tx_pause;
+	bool				rx_pause;
 	struct device_node		*of_node;
 	struct phylink			*phylink;
 	struct phylink_config		phylink_config;
@@ -1738,5 +1848,7 @@ int mtk_flow_offload_cmd(struct mtk_eth *eth, struct flow_cls_offload *cls,
 void mtk_flow_offload_cleanup(struct mtk_eth *eth, struct list_head *list);
 void mtk_eth_set_dma_device(struct mtk_eth *eth, struct device *dma_dev);
 
+bool mtk_shaper_is_available(struct mtk_eth *eth, int idx);
+void mtk_shaper_update_refcnt(struct mtk_eth *eth, int idx, bool add);
 
 #endif /* MTK_ETH_H */

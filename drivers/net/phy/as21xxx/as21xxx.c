@@ -1672,10 +1672,28 @@ static int aeon_gen1_c45_restart_aneg(struct phy_device *phydev)
 	int ret = 0;
 
 	ret = aeon_ipc_sync_parity(phydev, phydev->priv);
+	if (ret == -ETIMEDOUT) {
+		phydev_warn(phydev, "IPC busy while syncing autoneg parity, retrying\n");
+		usleep_range(100000, 120000);
+		ret = aeon_ipc_sync_parity(phydev, phydev->priv);
+	}
+	if (ret == -ETIMEDOUT) {
+		phydev_warn(phydev, "IPC busy while syncing autoneg parity, deferring restart\n");
+		return 0;
+	}
 	if (ret)
 		return ret;
 
 	ret = aeon_restart_an(phydev);
+	if (ret == -ETIMEDOUT) {
+		phydev_warn(phydev, "IPC busy while restarting autoneg, retrying\n");
+		usleep_range(100000, 120000);
+		ret = aeon_restart_an(phydev);
+	}
+	if (ret == -ETIMEDOUT) {
+		phydev_warn(phydev, "IPC busy while restarting autoneg, deferring restart\n");
+		return 0;
+	}
 	if (ret)
 		return ret;
 

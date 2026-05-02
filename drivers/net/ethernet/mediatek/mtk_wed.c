@@ -1751,7 +1751,6 @@ mtk_wed_rx_reset(struct mtk_wed_device *dev)
 				   false);
 	}
 	mtk_wed_free_rx_buffer(dev);
-	mtk_wed_hwrro_free_buffer(dev);
 
 	return 0;
 }
@@ -2650,8 +2649,7 @@ mtk_wed_irq_get(struct mtk_wed_device *dev, u32 mask)
 	u32 val, ext_mask;
 
 	if (mtk_wed_is_v3_or_greater(dev->hw))
-		ext_mask = MTK_WED_EXT_INT_STATUS_RX_DRV_COHERENT |
-			   MTK_WED_EXT_INT_STATUS_TKID_WO_PYLD;
+		ext_mask = MTK_WED_EXT_INT_STATUS_RX_DRV_COHERENT;
 	else
 		ext_mask = MTK_WED_EXT_INT_STATUS_ERROR_MASK;
 
