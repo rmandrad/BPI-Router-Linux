@@ -1085,6 +1085,7 @@ int mt76_set_channel(struct mt76_phy *phy, struct cfg80211_chan_def *chandef,
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(mt76_set_channel);
 
 int mt76_update_channel(struct mt76_phy *phy)
 {

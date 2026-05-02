@@ -134,8 +134,10 @@ int mt76_assign_vif_chanctx(struct ieee80211_hw *hw,
 	}
 
 	mlink->ctx = conf;
+	mvif->band_to_link[phy->band_idx] = link_id;
 	ret = dev->drv->vif_link_add(phy, vif, link_conf, mlink);
 	if (ret) {
+		mvif->band_to_link[phy->band_idx] = IEEE80211_LINK_UNSPECIFIED;
 		if (mlink_alloc)
 			kfree(mlink);
 		goto out;
@@ -176,6 +178,7 @@ void mt76_unassign_vif_chanctx(struct ieee80211_hw *hw,
 
 	dev->drv->vif_link_remove(phy, vif, link_conf, mlink);
 	mlink->ctx = NULL;
+	mlink->mvif->band_to_link[phy->band_idx] = IEEE80211_LINK_UNSPECIFIED;
 out:
 	mutex_unlock(&dev->mutex);
 }

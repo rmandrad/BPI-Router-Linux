@@ -280,6 +280,7 @@ struct mt7996_vif {
 
 	u8 mld_group_idx;
 	u8 mld_remap_idx;
+	u8 cs_links[__MT_MAX_BAND];
 };
 
 /* crash-dump */

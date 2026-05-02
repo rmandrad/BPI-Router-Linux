@@ -400,10 +400,23 @@ int mt7996_mcu_wa_cmd(struct mt7996_dev *dev, int cmd, u32 a1, u32 a2, u32 a3)
 static void
 mt7996_mcu_csa_finish(void *priv, u8 *mac, struct ieee80211_vif *vif)
 {
-	if (!vif->bss_conf.csa_active || vif->type == NL80211_IFTYPE_STATION)
+	struct ieee80211_bss_conf *link_conf;
+	unsigned int link_id;
+
+	if (vif->type == NL80211_IFTYPE_STATION)
 		return;
 
-	ieee80211_csa_finish(vif, 0);
+	if (vif->valid_links) {
+		for_each_vif_active_link(vif, link_conf, link_id) {
+			if (link_conf->csa_active)
+				ieee80211_csa_finish(vif, link_id);
+		}
+
+		return;
+	}
+
+	if (vif->bss_conf.csa_active)
+		ieee80211_csa_finish(vif, 0);
 }
 
 static void

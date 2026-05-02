@@ -855,6 +855,7 @@ struct mt76_vif_data {
 	struct mt76_phy *roc_phy;
 	u16 valid_links;
 	u8 deflink_id;
+	u8 band_to_link[__MT_MAX_BAND];
 };
 
 struct mt76_phy {
@@ -2118,6 +2119,9 @@ mt76_vif_init(struct ieee80211_vif *vif, struct mt76_vif_data *mvif)
 
 	mlink->mvif = mvif;
 	rcu_assign_pointer(mvif->link[0], mlink);
+
+	memset(mvif->band_to_link, IEEE80211_LINK_UNSPECIFIED,
+	       sizeof(mvif->band_to_link));
 }
 
 void mt76_vif_cleanup(struct mt76_dev *dev, struct ieee80211_vif *vif);

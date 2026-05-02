@@ -563,8 +563,10 @@ static int mt7996_add_interface(struct ieee80211_hw *hw,
 	for (i = 0; i < MT7996_MAX_RADIOS; i++) {
 		struct mt7996_phy *phy = dev->radio_phy[i];
 
-		if (!phy || !(wdev->radio_mask & BIT(i)) ||
-		    test_bit(MT76_STATE_RUNNING, &phy->mt76->state))
+		if (!phy || !(wdev->radio_mask & BIT(i)))
+			continue;
+
+		if (test_bit(MT76_STATE_RUNNING, &phy->mt76->state))
 			continue;
 
 		err = mt7996_run(phy);
@@ -579,6 +581,8 @@ static int mt7996_add_interface(struct ieee80211_hw *hw,
 
 	vif->offload_flags |= IEEE80211_OFFLOAD_ENCAP_4ADDR;
 	mvif->mt76.deflink_id = IEEE80211_LINK_UNSPECIFIED;
+	memset(mvif->cs_links, IEEE80211_LINK_UNSPECIFIED,
+	       sizeof(mvif->cs_links));
 
 out:
 	mutex_unlock(&dev->mt76.mutex);
@@ -1047,35 +1051,61 @@ mt7996_channel_switch_beacon(struct ieee80211_hw *hw,
 			     struct cfg80211_chan_def *chandef)
 {
 	struct mt7996_dev *dev = mt7996_hw_dev(hw);
+	struct mt7996_vif *mvif = (struct mt7996_vif *)vif->drv_priv;
 	struct mt7996_phy *phy = mt7996_band_phy(dev, chandef->chan->band);
 	struct ieee80211_bss_conf *link_conf;
+	u16 ready_links = 0;
 	unsigned int link_id;
+	bool link_found = false;
+	int i;
 
 	mutex_lock(&dev->mt76.mutex);
 
-	for_each_vif_active_link(vif, link_conf, link_id) {
-		struct mt7996_vif_link *link;
-		struct mt7996_phy *link_phy;
+	if (!phy)
+		goto out;
 
-		link = mt7996_vif_link(dev, vif, link_id);
-		if (!link)
-			continue;
+	link_id = mvif->mt76.band_to_link[phy->mt76->band_idx];
+	if (link_id == IEEE80211_LINK_UNSPECIFIED)
+		goto out;
 
-		link_phy = mt7996_vif_link_phy(link);
-		if (link_phy != phy)
-			continue;
+	for (i = 0; i < ARRAY_SIZE(mvif->cs_links); i++) {
+		if (mvif->cs_links[i] == IEEE80211_LINK_UNSPECIFIED) {
+			if (!link_found)
+				mvif->cs_links[i] = link_id;
+			else
+				break;
+		}
+
+		if (mvif->cs_links[i] == link_id)
+			link_found = true;
+
+		ready_links |= BIT(mvif->cs_links[i]);
+	}
+
+	if ((ready_links & vif->valid_links) != vif->valid_links)
+		goto out;
+
+	for (i = 0; i < ARRAY_SIZE(mvif->cs_links); i++) {
+		link_id = mvif->cs_links[i];
+		if (link_id == IEEE80211_LINK_UNSPECIFIED)
+			break;
+
+		link_conf = link_conf_dereference_protected(vif, link_id);
+		if (!link_conf)
+			break;
 
 		/* Reset beacon when channel switch triggered during CAC to let
 		 * FW correctly perform CSA countdown.
 		 */
-		if (!cfg80211_reg_can_beacon(hw->wiphy, &phy->mt76->chandef,
+		if (i == 0 &&
+		    !cfg80211_reg_can_beacon(hw->wiphy, &phy->mt76->chandef,
 					     vif->type))
 			mt7996_mcu_add_beacon(hw, vif, link_conf, false);
 
 		mt7996_mcu_add_beacon(hw, vif, link_conf, true);
-		break;
 	}
 
+out:
 	mutex_unlock(&dev->mt76.mutex);
 }
 
@@ -1086,8 +1116,12 @@ mt7996_post_channel_switch(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	struct cfg80211_chan_def *chandef = &link_conf->chanreq.oper;
 	struct mt7996_dev *dev = mt7996_hw_dev(hw);
 	struct mt7996_phy *phy = mt7996_band_phy(dev, chandef->chan->band);
+	struct mt7996_vif *mvif = (struct mt7996_vif *)vif->drv_priv;
 	struct mt7996_vif_link *link;
 	int ret = -EINVAL;
+
+	if (mvif->cs_links[0] != link_conf->link_id)
+		return 0;
 
 	mutex_lock(&dev->mt76.mutex);
 
@@ -1102,11 +1136,19 @@ mt7996_post_channel_switch(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	ieee80211_iterate_stations_mtx(hw, mt7996_mcu_update_sta_rec_bw, link);
 
 	ret = mt7996_mcu_rdd_resume_tx(phy);
+	if (ret)
+		goto out;
 
 out:
+	memset(mvif->cs_links, IEEE80211_LINK_UNSPECIFIED,
+	       sizeof(mvif->cs_links));
+
 	mutex_unlock(&dev->mt76.mutex);
 
-	return ret;
+	if (ret || phy->mt76->dfs_state != MT_DFS_STATE_CAC)
+		return ret;
+
+	return mt76_set_channel(phy->mt76, chandef, false);
 }
 
 static void
