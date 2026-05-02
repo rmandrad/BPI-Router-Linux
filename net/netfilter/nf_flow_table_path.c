@@ -5,6 +5,7 @@
 #include <linux/etherdevice.h>
 #include <linux/netlink.h>
 #include <linux/netfilter.h>
+#include <linux/if_vlan.h>
 #include <linux/spinlock.h>
 #include <linux/netfilter/nf_conntrack_common.h>
 #include <linux/netfilter/nf_tables.h>
@@ -86,6 +87,7 @@ struct nft_forward_info {
 	u8 ingress_vlans;
 	u8 h_source[ETH_ALEN];
 	u8 h_dest[ETH_ALEN];
+	u32 priority;
 	enum flow_offload_xmit_type xmit_type;
 };
 
@@ -94,6 +96,7 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 			      unsigned char *ha, struct nf_flowtable *flowtable)
 {
 	const struct net_device_path *path;
+	u32 vlan_pcp;
 	int i;
 
 	memcpy(info->h_dest, ha, ETH_ALEN);
@@ -137,6 +140,12 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 					path->encap.id;
 				info->encap[info->num_encaps].proto =
 					path->encap.proto;
+				if (path->type == DEV_PATH_VLAN) {
+					vlan_pcp = vlan_dev_get_egress_qos_mask(
+						(struct net_device *)path->dev,
+						info->priority);
+					info->encap[info->num_encaps].id |= vlan_pcp;
+				}
 				info->num_encaps++;
 			}
 			if (path->type == DEV_PATH_PPPOE)
@@ -257,7 +266,9 @@ static void nft_dev_forward_path(const struct nft_pktinfo *pkt,
 {
 	const struct dst_entry *dst = route->tuple[dir].dst;
 	struct net_device_path_stack stack;
-	struct nft_forward_info info = {};
+	struct nft_forward_info info = {
+		.priority = pkt->skb->priority,
+	};
 	unsigned char ha[ETH_ALEN];
 	int i;
 
@@ -287,7 +298,8 @@ static void nft_dev_forward_path(const struct nft_pktinfo *pkt,
 	route->tuple[!dir].in.num_encaps = info.num_encaps;
 	route->tuple[!dir].in.ingress_vlans = info.ingress_vlans;
 
-	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT) {
+	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT &&
+	    route->tuple[dir].xmit_type != FLOW_OFFLOAD_XMIT_XFRM) {
 		memcpy(route->tuple[dir].out.h_source, info.h_source, ETH_ALEN);
 		memcpy(route->tuple[dir].out.h_dest, info.h_dest, ETH_ALEN);
 		route->tuple[dir].xmit_type = info.xmit_type;
@@ -336,10 +348,8 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
 	nft_default_forward_path(route, this_dst, dir);
 	nft_default_forward_path(route, other_dst, !dir);
 
-	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH)
-		nft_dev_forward_path(pkt, route, ct, dir, ft);
-	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH)
-		nft_dev_forward_path(pkt, route, ct, !dir, ft);
+	nft_dev_forward_path(pkt, route, ct, dir, ft);
+	nft_dev_forward_path(pkt, route, ct, !dir, ft);
 
 	return 0;
 }

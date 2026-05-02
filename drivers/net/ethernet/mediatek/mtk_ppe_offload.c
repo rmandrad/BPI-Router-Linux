@@ -300,8 +300,11 @@ mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 	queue_mark = ct_mark & MTK_QDMA_QUEUE_MASK;
 	queue_mark_ul = (ct_mark >> 16) & MTK_QDMA_QUEUE_MASK;
 
-	if (eth->qos_toggle == 2 &&
-	    mtk_ppe_check_pppq_path(mac, idev, dsa_port)) {
+	if (eth->l4s_toggle && idev && idev->ieee80211_ptr) {
+		mtk_foe_entry_set_tops_entry(eth, foe, pse_port);
+		pse_port = PSE_TDMA_PORT;
+	} else if ((eth->qos_toggle == 2 || eth->qos_toggle == 3) &&
+		   mtk_ppe_check_pppq_path(mac, idev, dsa_port)) {
 		if (dsa_port >= 0 && ct && ct_dir >= 0 &&
 		    nf_ct_protonum(ct) == IPPROTO_TCP &&
 		    mtk_flow_is_tcp_ack(ct, ct_dir))
@@ -348,6 +351,10 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 
 	if (rhashtable_lookup(&eth->flow_table, &f->cookie, mtk_flow_ht_params))
 		return -EEXIST;
+
+	if (f->flow && f->flow->ct &&
+	    READ_ONCE(f->flow->ct->mark) == MTK_PPE_EXCEPTION_TAG)
+		return -EOPNOTSUPP;
 
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META)) {
 		struct flow_match_meta match;
@@ -568,6 +575,8 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 					 &wed_index, dscp, ct, ct_dir, ct_mark);
 	if (err)
 		return err;
+
+	mtk_foe_entry_set_dscp(eth, &foe, dscp);
 
 	if (wed_index >= 0 && (err = mtk_wed_flow_add(wed_index)) < 0)
 		return err;

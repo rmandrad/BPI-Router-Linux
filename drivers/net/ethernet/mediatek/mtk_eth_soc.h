@@ -1630,6 +1630,7 @@ struct mtk_eth {
 	u8				debug_level;
 	u8				l4s_toggle;
 	u8				qos_toggle;
+	u8				dscp_toggle;
 	struct mtk_ppe			*ppe[3];
 	struct rhashtable		flow_table;
 	struct socket			*ppe_roam_sock;
@@ -1739,6 +1740,10 @@ mtk_ppe_check_pppq_path(struct mtk_mac *mac, struct net_device *idev,
 
 	if ((dsa_port >= 0 && dsa_port <= 4) ||
 	    (dsa_port == 5 && wifi_rx))
+		return 1;
+
+	if (mac && mtk_is_netsys_v3_or_greater(mac->hw) &&
+	    mac->hw->qos_toggle == 3 && mac->speed <= SPEED_2500 && wifi_rx)
 		return 1;
 
 	return 0;

@@ -896,6 +896,16 @@ static int macvlan_hwtstamp_set(struct net_device *dev,
 	return generic_hwtstamp_set_lower(real_dev, cfg, extack);
 }
 
+static int macvlan_dev_fill_forward_path(struct net_device_path_ctx *ctx,
+				      struct net_device_path *path)
+{
+	path->type = DEV_PATH_MACVLAN;
+	path->dev = ctx->dev;
+	ctx->dev = macvlan_dev_real_dev(ctx->dev);
+
+	return 0;
+}
+
 /*
  * macvlan network devices have devices nesting below it and are a special
  * "super class" of normal network devices; split their locks off into a
@@ -1203,6 +1213,7 @@ static const struct net_device_ops macvlan_netdev_ops = {
 	.ndo_features_check	= passthru_features_check,
 	.ndo_hwtstamp_get	= macvlan_hwtstamp_get,
 	.ndo_hwtstamp_set	= macvlan_hwtstamp_set,
+	.ndo_fill_forward_path	= macvlan_dev_fill_forward_path,
 };
 
 static void macvlan_dev_free(struct net_device *dev)

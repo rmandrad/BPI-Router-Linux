@@ -264,7 +264,7 @@ mtk_ppe_debugfs_qos_toggle_write(struct file *file, const char __user *buf,
 	if (kstrtou8(tmp, 0, &toggle))
 		return -EINVAL;
 
-	if (toggle > 2)
+	if (toggle > 3)
 		return -EINVAL;
 
 	ppe->eth->qos_toggle = toggle;
@@ -279,6 +279,10 @@ mtk_ppe_debugfs_qos_toggle_write(struct file *file, const char __user *buf,
 	case 2:
 		pr_info("PPPQ enabled, please use qid 3~14.\n");
 		break;
+	case 3:
+		ppe->eth->qdma_shaper.threshold = 6000;
+		pr_info("Adaptive PPPQ enabled, please use qid 3~14.\n");
+		break;
 	}
 
 	return count;
@@ -289,6 +293,144 @@ static const struct file_operations mtk_ppe_debugfs_qos_toggle_fops = {
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.write = mtk_ppe_debugfs_qos_toggle_write,
+	.release = single_release,
+};
+
+static int mtk_ppe_debugfs_dscp_toggle_show(struct seq_file *m, void *private)
+{
+	struct mtk_ppe *ppe = m->private;
+
+	seq_printf(m, "PPE keep DSCP toggle=%u\n", ppe->eth->dscp_toggle);
+
+	return 0;
+}
+
+static int mtk_ppe_debugfs_dscp_toggle_open(struct inode *inode,
+					    struct file *file)
+{
+	return single_open(file, mtk_ppe_debugfs_dscp_toggle_show,
+			   inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_debugfs_dscp_toggle_write(struct file *file, const char __user *buf,
+				  size_t count, loff_t *offset)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_ppe *ppe = m->private;
+	char tmp[8] = {};
+	u8 toggle;
+
+	if (!count || count >= sizeof(tmp))
+		return -EINVAL;
+
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+
+	if (kstrtou8(tmp, 0, &toggle))
+		return -EINVAL;
+
+	if (toggle > 1)
+		return -EINVAL;
+
+	ppe->eth->dscp_toggle = toggle;
+
+	if (toggle)
+		pr_info("Keep DSCP mode enabled\n");
+	else
+		pr_info("Keep DSCP mode disabled\n");
+
+	return count;
+}
+
+static const struct file_operations mtk_ppe_debugfs_dscp_toggle_fops = {
+	.open = mtk_ppe_debugfs_dscp_toggle_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_debugfs_dscp_toggle_write,
+	.release = single_release,
+};
+
+static int mtk_ppe_debugfs_l4s_toggle_show(struct seq_file *m, void *private)
+{
+	struct mtk_ppe *ppe = m->private;
+
+	seq_printf(m, "PPE L4S toggle=%u\n", ppe->eth->l4s_toggle);
+
+	return 0;
+}
+
+static int mtk_ppe_debugfs_l4s_toggle_open(struct inode *inode,
+					   struct file *file)
+{
+	return single_open(file, mtk_ppe_debugfs_l4s_toggle_show,
+			   inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_debugfs_l4s_toggle_write(struct file *file, const char __user *buf,
+				 size_t count, loff_t *offset)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_ppe *ppe = m->private;
+	struct mtk_eth *eth = ppe->eth;
+	char tmp[8] = {};
+	u8 toggle;
+	int i;
+
+	if (!count || count >= sizeof(tmp))
+		return -EINVAL;
+
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+
+	if (kstrtou8(tmp, 0, &toggle))
+		return -EINVAL;
+
+	if (toggle > 1)
+		return -EINVAL;
+
+	eth->l4s_toggle = toggle;
+
+	for (i = 0; i < MTK_MAX_DEVS; i++) {
+		struct mtk_mac *mac;
+		u32 gdm_config, val;
+
+		if (!eth->netdev[i])
+			continue;
+
+		mac = netdev_priv(eth->netdev[i]);
+		val = mtk_r32(eth, MTK_GDMA_FWD_CFG(i));
+		val &= ~0xffff;
+
+		if (!eth->soc->offload_version)
+			gdm_config = MTK_GDMA_TO_PDMA;
+		else if (eth->soc->ppe_num >= 3 && mac->id == 2)
+			gdm_config = eth->soc->reg_map->gdma_to_ppe[2];
+		else if (eth->soc->ppe_num >= 2 && mac->id == 1)
+			gdm_config = eth->soc->reg_map->gdma_to_ppe[1];
+		else
+			gdm_config = eth->soc->reg_map->gdma_to_ppe[0];
+
+		if (eth->l4s_toggle)
+			gdm_config = MTK_GDMA_TO_TDMA;
+
+		mtk_w32(eth, val | gdm_config, MTK_GDMA_FWD_CFG(i));
+	}
+
+	if (toggle)
+		pr_info("L4S mode enabled\n");
+	else
+		pr_info("L4S mode disabled\n");
+
+	return count;
+}
+
+static const struct file_operations mtk_ppe_debugfs_l4s_toggle_fops = {
+	.open = mtk_ppe_debugfs_l4s_toggle_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_debugfs_l4s_toggle_write,
 	.release = single_release,
 };
 
@@ -305,6 +447,11 @@ int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index)
 			    &mtk_ppe_debugfs_level_fops);
 	debugfs_create_file("qos_toggle", 0644, root, ppe,
 			    &mtk_ppe_debugfs_qos_toggle_fops);
+	debugfs_create_file("dscp_toggle", 0644, root, ppe,
+			    &mtk_ppe_debugfs_dscp_toggle_fops);
+	if (ppe->eth->soc->caps == MT7988_CAPS)
+		debugfs_create_file("l4s_toggle", 0644, root, ppe,
+				    &mtk_ppe_debugfs_l4s_toggle_fops);
 
 	return 0;
 }

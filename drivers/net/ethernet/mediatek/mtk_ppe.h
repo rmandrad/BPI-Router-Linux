@@ -12,6 +12,7 @@
 #define MTK_PPE_ENTRIES			(1024 << MTK_PPE_ENTRIES_SHIFT)
 #define MTK_PPE_HASH_MASK		(MTK_PPE_ENTRIES - 1)
 #define MTK_PPE_WAIT_TIMEOUT_US		1000000
+#define MTK_PPE_EXCEPTION_TAG		0x99
 
 #define MTK_FOE_IB1_UNBIND_TIMESTAMP	GENMASK(7, 0)
 #define MTK_FOE_IB1_UNBIND_PACKETS	GENMASK(23, 8)
@@ -96,7 +97,11 @@ enum {
 #define MTK_FOE_WINFO_AMSDU_HF		BIT(23)
 #define MTK_FOE_WINFO_AMSDU_EN		BIT(24)
 
+#define MTK_FOE_UDF_KEEP_ECN		BIT(9)
+#define MTK_FOE_UDF_KEEP_DSCP		BIT(10)
+
 #define MTK_FOE_TPORT_IDX		GENMASK(3, 0)
+#define MTK_FOE_TOPS_ENTRY		GENMASK(13, 8)
 
 enum {
 	MTK_FOE_STATE_INVALID,
@@ -345,6 +350,7 @@ struct mtk_ppe {
 	struct rhashtable l2_flows;
 
 	void *acct_table;
+	spinlock_t cache_lock;
 };
 
 struct mtk_ppe *mtk_ppe_init(struct mtk_eth *eth, void __iomem *base, int index);
@@ -402,6 +408,13 @@ int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int tid, bool amsdu_en);
 int mtk_foe_entry_set_queue(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			    unsigned int queue);
+unsigned int mtk_foe_entry_get_queue(struct mtk_eth *eth,
+				     struct mtk_foe_entry *entry);
+int mtk_foe_entry_set_dscp(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			   u8 dscp);
+int mtk_foe_entry_set_tops_entry(struct mtk_eth *eth,
+				 struct mtk_foe_entry *entry,
+				 int tops_entry);
 int mtk_flow_entry_match_len(struct mtk_eth *eth, struct mtk_foe_entry *entry);
 bool mtk_flow_entry_match(struct mtk_eth *eth, struct mtk_flow_entry *entry,
 			  struct mtk_foe_entry *data, int len);

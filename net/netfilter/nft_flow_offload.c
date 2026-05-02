@@ -112,10 +112,10 @@ static void nft_flow_offload_eval(const struct nft_expr *expr,
 	if (!nf_ct_is_confirmed(ct))
 		goto out;
 
+	dir = CTINFO2DIR(ctinfo);
 	if (test_and_set_bit(IPS_OFFLOAD_BIT, &ct->status))
 		goto out;
 
-	dir = CTINFO2DIR(ctinfo);
 	if (nft_flow_route(pkt, ct, &route, dir, priv->flowtable) < 0)
 		goto err_flow_route;
 
