@@ -6,6 +6,8 @@
 #include <linux/netlink.h>
 #include <net/flow_dissector.h>
 
+struct flow_offload;
+
 struct flow_match {
 	struct flow_dissector	*dissector;
 	void			*mask;
@@ -696,6 +698,7 @@ struct flow_cls_offload {
 	enum flow_cls_command command;
 	bool use_act_stats;
 	unsigned long cookie;
+	struct flow_offload *flow;
 	struct flow_rule *rule;
 	struct flow_stats stats;
 	u32 classid;

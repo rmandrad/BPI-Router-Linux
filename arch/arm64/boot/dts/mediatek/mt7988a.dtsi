@@ -146,7 +146,7 @@
 		};
 
 		wmcpu_emi: wmcpu-reserved@47cc0000 {
-			reg = <0 0x47cc0000 0 0x00100000>;
+			reg = <0 0x47cc0000 0 0x00A00000>;
 			no-map;
 		};
 

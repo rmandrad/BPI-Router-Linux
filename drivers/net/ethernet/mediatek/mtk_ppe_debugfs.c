@@ -230,6 +230,68 @@ static const struct file_operations mtk_ppe_debugfs_level_fops = {
 	.release = single_release,
 };
 
+static int mtk_ppe_debugfs_qos_toggle_show(struct seq_file *m, void *private)
+{
+	struct mtk_ppe *ppe = m->private;
+
+	seq_printf(m, "PPE QoS toggle=%u\n", ppe->eth->qos_toggle);
+
+	return 0;
+}
+
+static int mtk_ppe_debugfs_qos_toggle_open(struct inode *inode,
+					   struct file *file)
+{
+	return single_open(file, mtk_ppe_debugfs_qos_toggle_show,
+			   inode->i_private);
+}
+
+static ssize_t
+mtk_ppe_debugfs_qos_toggle_write(struct file *file, const char __user *buf,
+				 size_t count, loff_t *offset)
+{
+	struct seq_file *m = file->private_data;
+	struct mtk_ppe *ppe = m->private;
+	char tmp[8] = {};
+	u8 toggle;
+
+	if (!count || count >= sizeof(tmp))
+		return -EINVAL;
+
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+
+	if (kstrtou8(tmp, 0, &toggle))
+		return -EINVAL;
+
+	if (toggle > 2)
+		return -EINVAL;
+
+	ppe->eth->qos_toggle = toggle;
+
+	switch (toggle) {
+	case 0:
+		pr_info("HQoS/PPPQ disabled\n");
+		break;
+	case 1:
+		pr_info("HQoS enabled, please use qid 0~14.\n");
+		break;
+	case 2:
+		pr_info("PPPQ enabled, please use qid 3~14.\n");
+		break;
+	}
+
+	return count;
+}
+
+static const struct file_operations mtk_ppe_debugfs_qos_toggle_fops = {
+	.open = mtk_ppe_debugfs_qos_toggle_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.write = mtk_ppe_debugfs_qos_toggle_write,
+	.release = single_release,
+};
+
 int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index)
 {
 	struct dentry *root;
@@ -241,6 +303,8 @@ int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index)
 	debugfs_create_file("bind", S_IRUGO, root, ppe, &mtk_ppe_debugfs_foe_bind_fops);
 	debugfs_create_file("debug_level", 0444, root, ppe,
 			    &mtk_ppe_debugfs_level_fops);
+	debugfs_create_file("qos_toggle", 0644, root, ppe,
+			    &mtk_ppe_debugfs_qos_toggle_fops);
 
 	return 0;
 }

@@ -885,11 +885,13 @@ static int nf_flow_offload_alloc(const struct flow_offload_work *offload,
 }
 
 static void nf_flow_offload_init(struct flow_cls_offload *cls_flow,
+				 struct flow_offload *flow,
 				 __be16 proto, int priority,
 				 enum flow_cls_command cmd,
 				 const struct flow_offload_tuple *tuple,
 				 struct netlink_ext_ack *extack)
 {
+	cls_flow->flow = flow;
 	cls_flow->common.protocol = proto;
 	cls_flow->common.prio = priority;
 	cls_flow->common.extack = extack;
@@ -911,7 +913,7 @@ static int nf_flow_offload_tuple(struct nf_flowtable *flowtable,
 	__be16 proto = ETH_P_ALL;
 	int err, i = 0;
 
-	nf_flow_offload_init(&cls_flow, proto, priority, cmd,
+	nf_flow_offload_init(&cls_flow, flow, proto, priority, cmd,
 			     &flow->tuplehash[dir].tuple, &extack);
 	if (cmd == FLOW_CLS_REPLACE)
 		cls_flow.rule = flow_rule->rule;

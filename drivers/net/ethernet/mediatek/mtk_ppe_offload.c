@@ -7,9 +7,13 @@
 #include <linux/rhashtable.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/netfilter/nf_conntrack_common.h>
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
 #include <net/dsa.h>
+#include <net/netfilter/nf_conntrack.h>
+#include <net/netfilter/nf_conntrack_acct.h>
+#include <net/netfilter/nf_flow_table.h>
 #include "mtk_eth_soc.h"
 #include "mtk_wed.h"
 
@@ -191,12 +195,57 @@ mtk_flow_get_dsa_port(struct net_device **dev, int *proto)
 #endif
 }
 
+static struct nf_conn_acct *mtk_nf_conn_acct_find(const struct nf_conn *ct)
+{
+	struct nf_ct_ext *ext = ct->ext;
+
+	if (!ext || !ext->offset[NF_CT_EXT_ACCT] || unlikely(ext->gen_id))
+		return NULL;
+
+	return (void *)ext + ext->offset[NF_CT_EXT_ACCT];
+}
+
+static bool mtk_flow_is_tcp_ack(struct nf_conn *ct, int dir)
+{
+	struct nf_conn_counter *counter, *other_counter;
+	struct nf_conn_acct *acct;
+	u64 packets, other_packets;
+	u64 bytes, other_bytes;
+	u64 avg, other_avg;
+
+	if (dir < 0 || dir >= IP_CT_DIR_MAX)
+		return false;
+
+	acct = mtk_nf_conn_acct_find(ct);
+	if (!acct)
+		return false;
+
+	counter = &acct->counter[dir];
+	other_counter = &acct->counter[!dir];
+
+	packets = atomic64_read(&counter->packets);
+	other_packets = atomic64_read(&other_counter->packets);
+	bytes = atomic64_read(&counter->bytes);
+	other_bytes = atomic64_read(&other_counter->bytes);
+
+	if (!packets || !other_packets)
+		return false;
+
+	avg = bytes / packets;
+	other_avg = other_bytes / other_packets;
+
+	return avg <= 64 && avg < other_avg;
+}
+
 static int
 mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
-			   struct net_device *dev, const u8 *dest_mac,
-			   int *wed_index, u8 dscp)
+			   struct net_device *idev, struct net_device *dev,
+			   const u8 *dest_mac, int *wed_index, u8 dscp,
+			   struct nf_conn *ct, int ct_dir, u32 ct_mark)
 {
 	struct mtk_wdma_info info = {};
+	struct mtk_mac *mac = NULL;
+	u32 queue_mark, queue_mark_ul;
 	int pse_port, dsa_port, dsa_proto, queue;
 
 	info.tid = dscp;
@@ -228,21 +277,46 @@ mtk_flow_set_output_device(struct mtk_eth *eth, struct mtk_foe_entry *foe,
 
 	dsa_port = mtk_flow_get_dsa_port(&dev, &dsa_proto);
 
-	if (dev == eth->netdev[0])
+	if (dev == eth->netdev[0]) {
 		pse_port = PSE_GDM1_PORT;
-	else if (dev == eth->netdev[1])
+		mac = eth->mac[0];
+	} else if (dev == eth->netdev[1]) {
 		pse_port = PSE_GDM2_PORT;
-	else if (dev == eth->netdev[2])
+		mac = eth->mac[1];
+	} else if (dev == eth->netdev[2]) {
 		pse_port = PSE_GDM3_PORT;
-	else
+		mac = eth->mac[2];
+	} else {
 		return -EOPNOTSUPP;
+	}
 
 	if (dsa_port >= 0) {
 		mtk_foe_entry_set_dsa(eth, foe, dsa_proto, dsa_port);
 		queue = 3 + dsa_port;
 	} else {
-		queue = pse_port - 1;
+		queue = pse_port == PSE_GDM3_PORT ? 2 : pse_port - 1;
 	}
+
+	queue_mark = ct_mark & MTK_QDMA_QUEUE_MASK;
+	queue_mark_ul = (ct_mark >> 16) & MTK_QDMA_QUEUE_MASK;
+
+	if (eth->qos_toggle == 2 &&
+	    mtk_ppe_check_pppq_path(mac, idev, dsa_port)) {
+		if (dsa_port >= 0 && ct && ct_dir >= 0 &&
+		    nf_ct_protonum(ct) == IPPROTO_TCP &&
+		    mtk_flow_is_tcp_ack(ct, ct_dir))
+			queue += 6;
+	} else if (eth->qos_toggle == 1 || queue_mark >= 15) {
+		bool qos_ul = eth->qos_toggle == 2 ?
+			      queue_mark_ul >= 15 : queue_mark_ul >= 1;
+
+		if (qos_ul && dev == eth->netdev[1] &&
+		    queue_mark_ul < MTK_QDMA_NUM_QUEUES)
+			queue = queue_mark_ul;
+		else if (queue_mark < MTK_QDMA_NUM_QUEUES)
+			queue = queue_mark;
+	}
+
 	mtk_foe_entry_set_queue(eth, foe, queue);
 
 out:
@@ -261,9 +335,12 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 	struct mtk_flow_data data = {};
 	struct mtk_foe_entry foe;
 	struct mtk_flow_entry *entry;
+	struct nf_conn *ct = NULL;
 	int offload_type = 0;
 	int wed_index = -1;
+	int ct_dir = -1;
 	u16 addr_type = 0;
+	u32 ct_mark = 0;
 	u8 l4proto = 0;
 	u8 dscp = 0;
 	int err = 0;
@@ -387,9 +464,28 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 			data.pppoe.sid = act->pppoe.sid;
 			data.pppoe.num++;
 			break;
+		case FLOW_ACTION_CT_METADATA:
+			ct = (struct nf_conn *)(act->ct_metadata.cookie &
+						NFCT_PTRMASK);
+			ct_dir = act->ct_metadata.orig_dir ?
+				 IP_CT_DIR_ORIGINAL : IP_CT_DIR_REPLY;
+			ct_mark = act->ct_metadata.mark;
+			break;
 		default:
 			return -EOPNOTSUPP;
 		}
+	}
+
+	if (f->flow && f->flow->ct) {
+		const struct flow_offload_tuple *orig_tuple;
+
+		orig_tuple = &f->flow->tuplehash[FLOW_OFFLOAD_DIR_ORIGINAL].tuple;
+		ct = f->flow->ct;
+		ct_dir = f->cookie == (unsigned long)orig_tuple ?
+			 IP_CT_DIR_ORIGINAL : IP_CT_DIR_REPLY;
+#if IS_ENABLED(CONFIG_NF_CONNTRACK_MARK)
+		ct_mark = READ_ONCE(ct->mark);
+#endif
 	}
 
 	if (!is_valid_ether_addr(data.eth.h_source) ||
@@ -468,8 +564,8 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 			return err;
 	}
 
-	err = mtk_flow_set_output_device(eth, &foe, odev, data.eth.h_dest,
-					 &wed_index, dscp);
+	err = mtk_flow_set_output_device(eth, &foe, idev, odev, data.eth.h_dest,
+					 &wed_index, dscp, ct, ct_dir, ct_mark);
 	if (err)
 		return err;
 

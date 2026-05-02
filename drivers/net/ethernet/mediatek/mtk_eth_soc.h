@@ -1629,6 +1629,7 @@ struct mtk_eth {
 
 	u8				debug_level;
 	u8				l4s_toggle;
+	u8				qos_toggle;
 	struct mtk_ppe			*ppe[3];
 	struct rhashtable		flow_table;
 	struct socket			*ppe_roam_sock;
@@ -1728,6 +1729,19 @@ static inline bool mtk_is_netsys_v2_or_greater(struct mtk_eth *eth)
 static inline bool mtk_is_netsys_v3_or_greater(struct mtk_eth *eth)
 {
 	return eth->soc->version > 2;
+}
+
+static inline int
+mtk_ppe_check_pppq_path(struct mtk_mac *mac, struct net_device *idev,
+			int dsa_port)
+{
+	bool wifi_rx = idev && idev->ieee80211_ptr;
+
+	if ((dsa_port >= 0 && dsa_port <= 4) ||
+	    (dsa_port == 5 && wifi_rx))
+		return 1;
+
+	return 0;
 }
 
 static inline struct mtk_foe_entry *

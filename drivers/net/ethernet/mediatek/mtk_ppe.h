@@ -96,6 +96,8 @@ enum {
 #define MTK_FOE_WINFO_AMSDU_HF		BIT(23)
 #define MTK_FOE_WINFO_AMSDU_EN		BIT(24)
 
+#define MTK_FOE_TPORT_IDX		GENMASK(3, 0)
+
 enum {
 	MTK_FOE_STATE_INVALID,
 	MTK_FOE_STATE_UNBIND,
@@ -124,6 +126,8 @@ struct mtk_foe_mac_info {
 	/* netsys_v3 */
 	u32 w3info;
 	u32 amsdu;
+	u16 tinfo;
+	u16 tport;
 };
 
 /* software-only entry type */
@@ -398,6 +402,9 @@ int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int tid, bool amsdu_en);
 int mtk_foe_entry_set_queue(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			    unsigned int queue);
+int mtk_flow_entry_match_len(struct mtk_eth *eth, struct mtk_foe_entry *entry);
+bool mtk_flow_entry_match(struct mtk_eth *eth, struct mtk_flow_entry *entry,
+			  struct mtk_foe_entry *data, int len);
 int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
 void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
 int mtk_foe_entry_idle_time(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
