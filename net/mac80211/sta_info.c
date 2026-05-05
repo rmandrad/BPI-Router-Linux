@@ -2444,12 +2444,27 @@ EXPORT_SYMBOL(ieee80211_sta_recalc_aggregates);
 
 void ieee80211_sta_update_pending_airtime(struct ieee80211_local *local,
 					  struct sta_info *sta, u8 ac,
-					  u16 tx_airtime, bool tx_completed)
+					  u16 tx_airtime, bool tx_completed,
+					  bool mcast)
 {
 	int tx_pending;
 
 	if (!wiphy_ext_feature_isset(local->hw.wiphy, NL80211_EXT_FEATURE_AQL))
 		return;
+
+	if (mcast) {
+		if (!tx_completed) {
+			atomic_add(tx_airtime, &local->aql_bc_pending_airtime);
+			return;
+		}
+
+		tx_pending = atomic_sub_return(tx_airtime,
+					       &local->aql_bc_pending_airtime);
+		if (tx_pending < 0)
+			atomic_cmpxchg(&local->aql_bc_pending_airtime,
+				       tx_pending, 0);
+		return;
+	}
 
 	if (!tx_completed) {
 		if (sta)
@@ -2539,6 +2554,13 @@ static void sta_stats_decode_rate(struct ieee80211_local *local, u32 rate,
 		int rate_idx = STA_STATS_GET(LEGACY_IDX, rate);
 
 		sband = local->hw.wiphy->bands[band];
+
+		if (!sband) {
+			wiphy_warn(local->hw.wiphy,
+				    "Invalid band %d\n",
+				    band);
+			break;
+		}
 
 		if (WARN_ON_ONCE(!sband->bitrates))
 			break;
@@ -2981,6 +3003,29 @@ static void sta_set_link_sinfo(struct sta_info *sta,
 	}
 }
 
+static u32 sta_estimate_expected_throughput(struct sta_info *sta,
+					    struct station_info *sinfo)
+{
+	struct ieee80211_sub_if_data *sdata = sta->sdata;
+	struct ieee80211_local *local = sdata->local;
+	struct rate_info *ri = &sinfo->txrate;
+	struct ieee80211_hw *hw = &local->hw;
+	struct ieee80211_chanctx_conf *conf;
+	u32 duration;
+	u8 band = 0;
+
+	conf = rcu_dereference(sdata->vif.bss_conf.chanctx_conf);
+	if (conf)
+			band = conf->def.chan->band;
+
+	duration = ieee80211_rate_expected_tx_airtime(hw, NULL, ri, band, true, 1024);
+	duration += duration >> 4; /* add assumed packet error rate of ~6% */
+	if (!duration)
+		return 0;
+
+	return ((1024 * USEC_PER_SEC) / duration) * 8;
+}
+
 void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo,
 		   bool tidstats)
 {
@@ -3206,6 +3251,8 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo,
 		sinfo->sta_flags.set |= BIT(NL80211_STA_FLAG_TDLS_PEER);
 
 	thr = sta_get_expected_throughput(sta);
+	if (!thr && (sinfo->filled & BIT_ULL(NL80211_STA_INFO_TX_BITRATE)))
+	    thr = sta_estimate_expected_throughput(sta, sinfo);
 
 	if (thr != 0) {
 		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_EXPECTED_THROUGHPUT);
@@ -3232,7 +3279,10 @@ void sta_set_sinfo(struct sta_info *sta, struct station_info *sinfo,
 		struct link_sta_info *link_sta;
 		int link_id;
 
-		ether_addr_copy(sinfo->mld_addr, sta->addr);
+		sinfo->mlo_params_valid = true;
+		sinfo->assoc_link_id = sta->deflink.link_id;
+		if (sta->sta.mlo)
+			ether_addr_copy(sinfo->mld_addr, sta->addr);
 
 		/* assign valid links first for iteration */
 		sinfo->valid_links = sta->sta.valid_links;

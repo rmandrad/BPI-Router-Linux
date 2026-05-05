@@ -2963,6 +2963,8 @@ static void reg_copy_dfs_chan_state(struct ieee80211_channel *dst_chan,
 	    dst_chan->dfs_state == NL80211_DFS_USABLE) {
 		dst_chan->dfs_state = src_chan->dfs_state;
 		dst_chan->dfs_state_entered = src_chan->dfs_state_entered;
+		dst_chan->dfs_state_last_available =
+			src_chan->dfs_state_last_available;
 	}
 }
 

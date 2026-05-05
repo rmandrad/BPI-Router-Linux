@@ -168,6 +168,35 @@ void ieee80211_offchannel_return(struct ieee80211_local *local)
 					false);
 }
 
+u32 ieee80211_offchannel_radio_mask(struct ieee80211_local *local)
+{
+	const struct wiphy_radio *radio;
+	struct ieee80211_roc_work *roc;
+	u32 mask = 0;
+	int r;
+
+	for (r = 0; r < local->hw.wiphy->n_radio; r++) {
+		radio = &local->hw.wiphy->radio[r];
+
+		list_for_each_entry(roc, &local->roc_list, list) {
+			struct cfg80211_chan_def chandef = {};
+
+			if (!roc->started)
+				continue;
+
+			cfg80211_chandef_create(&chandef, roc->chan,
+						NL80211_CHAN_NO_HT);
+			if (!cfg80211_radio_chandef_valid(radio, &chandef))
+				continue;
+
+			mask |= BIT(r);
+			break;
+		}
+	}
+
+	return mask;
+}
+
 static void ieee80211_roc_notify_destroy(struct ieee80211_roc_work *roc)
 {
 	/* was never transmitted */
@@ -566,8 +595,10 @@ static int ieee80211_start_roc_work(struct ieee80211_local *local,
 				    enum ieee80211_roc_type type)
 {
 	struct ieee80211_roc_work *roc, *tmp;
+	struct cfg80211_chan_def chandef = {};
 	bool queued = false, combine_started = true;
 	struct cfg80211_scan_request *req;
+	u32 radio_mask;
 	int ret;
 
 	lockdep_assert_wiphy(local->hw.wiphy);
@@ -578,6 +609,13 @@ static int ieee80211_start_roc_work(struct ieee80211_local *local,
 
 	if (!local->emulate_chanctx && !local->ops->remain_on_channel)
 		return -EOPNOTSUPP;
+
+	req = wiphy_dereference(local->hw.wiphy, local->scan_req);
+	cfg80211_chandef_create(&chandef, channel, NL80211_CHAN_NO_HT);
+	radio_mask = ieee80211_chandef_radio_mask(local, &chandef);
+	if (!ieee80211_can_leave_ch(sdata, req, radio_mask) &&
+	    !ieee80211_scanning_busy(local, &chandef))
+		return -EBUSY;
 
 	roc = kzalloc_obj(*roc);
 	if (!roc)
@@ -613,11 +651,8 @@ static int ieee80211_start_roc_work(struct ieee80211_local *local,
 		roc->mgmt_tx_cookie = *cookie;
 	}
 
-	req = wiphy_dereference(local->hw.wiphy, local->scan_req);
-
 	/* if there's no need to queue, handle it immediately */
-	if (list_empty(&local->roc_list) &&
-	    !local->scanning && !ieee80211_is_radar_required(local, req)) {
+	if (list_empty(&local->roc_list) && !local->scanning) {
 		/* if not HW assist, just queue & schedule work */
 		if (!local->ops->remain_on_channel) {
 			list_add_tail(&roc->list, &local->roc_list);

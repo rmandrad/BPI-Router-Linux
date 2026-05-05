@@ -923,6 +923,23 @@ struct wireless_dev *ieee80211_vif_to_wdev(struct ieee80211_vif *vif)
 }
 EXPORT_SYMBOL_GPL(ieee80211_vif_to_wdev);
 
+u32 ieee80211_chandef_radio_mask(struct ieee80211_local *local,
+				 struct cfg80211_chan_def *chandef)
+{
+	struct wiphy *wiphy = local->hw.wiphy;
+	const struct wiphy_radio *radio;
+	u32 mask = 0;
+	int i;
+
+	for (i = 0; i < wiphy->n_radio; i++) {
+		radio = &wiphy->radio[i];
+		if (cfg80211_radio_chandef_valid(radio, chandef))
+			mask |= BIT(i);
+	}
+
+	return mask;
+}
+
 /*
  * Nothing should have been stuffed into the workqueue during
  * the suspend->resume cycle. Since we can't check each caller

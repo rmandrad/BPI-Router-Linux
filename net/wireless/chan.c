@@ -639,6 +639,8 @@ void cfg80211_set_dfs_state(struct wiphy *wiphy,
 
 		c->dfs_state = dfs_state;
 		c->dfs_state_entered = jiffies;
+		if (dfs_state == NL80211_DFS_AVAILABLE)
+			c->dfs_state_last_available = jiffies;
 	}
 }
 
@@ -740,6 +742,44 @@ static bool cfg80211_dfs_permissive_chan(struct wiphy *wiphy,
 	}
 
 	return false;
+}
+
+static bool cfg80211_dfs_sta_present(struct wiphy *wiphy,
+				     struct ieee80211_channel *chan)
+{
+	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
+	struct wireless_dev *wdev;
+
+	lockdep_assert_held(&rdev->wiphy.mtx);
+
+	if (!(chan->flags & IEEE80211_CHAN_RADAR))
+		return false;
+
+	list_for_each_entry(wdev, &rdev->wiphy.wdev_list, list) {
+		if (cfg80211_dfs_permissive_check_wdev(rdev, NL80211_IFTYPE_AP,
+						       wdev, chan))
+			return true;
+	}
+
+	return false;
+}
+
+void cfg80211_set_dfs_concurrent(struct wiphy *wiphy,
+				 const struct cfg80211_chan_def *chandef)
+{
+	struct ieee80211_channel *c;
+
+	for_each_subchan(chandef, freq, cf) {
+		c = ieee80211_get_channel_khz(wiphy, freq);
+		if (!c)
+			return;
+
+		if ((c->flags & IEEE80211_CHAN_RADAR) &&
+		    !cfg80211_dfs_sta_present(wiphy, c))
+			return;
+	}
+
+	cfg80211_set_dfs_state(wiphy, chandef, NL80211_DFS_AVAILABLE);
 }
 
 static int cfg80211_get_chans_dfs_required(struct wiphy *wiphy,
@@ -1015,6 +1055,28 @@ bool cfg80211_any_wiphy_oper_chan(struct wiphy *wiphy,
 	}
 
 	return false;
+}
+
+void cfg80211_update_last_available(struct wiphy *wiphy,
+				    const struct cfg80211_chan_def *chandef)
+{
+	struct ieee80211_channel *c;
+	int width;
+
+	if (WARN_ON(!cfg80211_chandef_valid(chandef)))
+		return;
+
+	width = cfg80211_chandef_get_width(chandef);
+	if (width < 0)
+		return;
+
+	for_each_subchan(chandef, freq, cf) {
+		c = ieee80211_get_channel_khz(wiphy, freq);
+		if (!c)
+			return;
+
+		c->dfs_state_last_available = jiffies;
+	}
 }
 
 static bool cfg80211_chandef_dfs_available(struct wiphy *wiphy,

@@ -1915,12 +1915,6 @@ static int ieee80211_stop_ap(struct wiphy *wiphy, struct net_device *dev,
 	ieee80211_link_info_change_notify(sdata, link,
 					  BSS_CHANGED_BEACON_ENABLED);
 
-	ieee80211_remove_link_keys(link, &keys);
-	if (!list_empty(&keys)) {
-		synchronize_net();
-		ieee80211_free_key_list(local, &keys);
-	}
-
 	if (sdata->wdev.links[link_id].cac_started) {
 		chandef = link_conf->chanreq.oper;
 		wiphy_hrtimer_work_cancel(wiphy, &link->dfs_cac_timer_work);
@@ -3861,6 +3855,27 @@ static bool ieee80211_is_scan_ongoing(struct wiphy *wiphy,
 	return false;
 }
 
+bool ieee80211_scanning_busy(struct ieee80211_local *local,
+			     struct cfg80211_chan_def *chandef)
+{
+	struct cfg80211_scan_request *scan_req;
+	struct wiphy *wiphy = local->hw.wiphy;
+	u32 mask;
+
+	if (!ieee80211_is_scan_ongoing(wiphy, local, chandef))
+		return false;
+
+	if (!wiphy->n_radio)
+		return true;
+
+	mask = ieee80211_offchannel_radio_mask(local);
+	scan_req = wiphy_dereference(wiphy, local->scan_req);
+	if (scan_req)
+		mask |= ieee80211_scan_req_radio_mask(local, scan_req);
+
+	return mask & ieee80211_chandef_radio_mask(local, chandef);
+}
+
 static int ieee80211_start_radar_detection(struct wiphy *wiphy,
 					   struct net_device *dev,
 					   struct cfg80211_chan_def *chandef,
@@ -3874,7 +3889,7 @@ static int ieee80211_start_radar_detection(struct wiphy *wiphy,
 
 	lockdep_assert_wiphy(local->hw.wiphy);
 
-	if (ieee80211_is_scan_ongoing(wiphy, local, chandef))
+	if (ieee80211_scanning_busy(local, chandef))
 		return -EBUSY;
 
 	link_data = sdata_dereference(sdata->link[link_id], sdata);
@@ -4373,7 +4388,7 @@ __ieee80211_channel_switch(struct wiphy *wiphy, struct net_device *dev,
 
 	lockdep_assert_wiphy(local->hw.wiphy);
 
-	if (ieee80211_is_scan_ongoing(wiphy, local, &params->chandef))
+	if (ieee80211_scanning_busy(local, &params->chandef))
 		return -EBUSY;
 
 	if (sdata->wdev.links[link_id].cac_started)
@@ -4616,7 +4631,9 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 	struct ieee80211_tx_info *info;
 	struct sta_info *sta;
 	struct ieee80211_chanctx_conf *chanctx_conf;
+	struct ieee80211_bss_conf *link_conf;
 	enum nl80211_band band;
+	u8 link_id;
 	int ret;
 
 	/* the lock is needed to assign the cookie later */
@@ -4631,7 +4648,23 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 
 	qos = sta->sta.wme;
 
-	chanctx_conf = rcu_dereference(sdata->vif.bss_conf.chanctx_conf);
+	if (ieee80211_vif_is_mld(&sdata->vif)) {
+		if (sta->sta.valid_links)
+			link_id = ffs(sta->sta.valid_links) - 1;
+		else
+			link_id = sta->deflink.link_id;
+
+		link_conf = rcu_dereference(sdata->vif.link_conf[link_id]);
+		if (unlikely(!link_conf)) {
+			ret = -ENOLINK;
+			goto unlock;
+		}
+	} else {
+		link_id = IEEE80211_LINK_UNSPECIFIED;
+		link_conf = &sdata->vif.bss_conf;
+	}
+
+	chanctx_conf = rcu_dereference(link_conf->chanctx_conf);
 	if (!chanctx_conf) {
 		ret = -EINVAL;
 		goto unlock;
@@ -4663,14 +4696,15 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 	nullfunc->frame_control = fc;
 	nullfunc->duration_id = 0;
 	memcpy(nullfunc->addr1, sta->sta.addr, ETH_ALEN);
-	memcpy(nullfunc->addr2, sdata->vif.addr, ETH_ALEN);
-	memcpy(nullfunc->addr3, sdata->vif.addr, ETH_ALEN);
+	memcpy(nullfunc->addr2, link_conf->addr, ETH_ALEN);
+	memcpy(nullfunc->addr3, link_conf->addr, ETH_ALEN);
 	nullfunc->seq_ctrl = 0;
 
 	info = IEEE80211_SKB_CB(skb);
 
 	info->flags |= IEEE80211_TX_CTL_REQ_TX_STATUS |
 		       IEEE80211_TX_INTFL_NL80211_FRAME_TX;
+	info->control.flags |= u32_encode_bits(link_id, IEEE80211_TX_CTRL_MLO_LINK);
 	info->band = band;
 
 	skb_set_queue_mapping(skb, IEEE80211_AC_VO);

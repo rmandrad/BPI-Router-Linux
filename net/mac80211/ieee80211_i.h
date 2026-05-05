@@ -111,6 +111,8 @@ ieee80211_sta_keep_active(struct sta_info *sta, u8 ac)
 	return time_before_eq(jiffies, sta->airtime[ac].last_active + HZ / 10);
 }
 
+#define AIRTIME_QUANTUM_SHIFT	3
+
 struct ieee80211_bss {
 	u32 device_ts_beacon, device_ts_presp;
 
@@ -1425,10 +1427,12 @@ struct ieee80211_local {
 	spinlock_t handle_wake_tx_queue_lock;
 
 	u16 airtime_flags;
+	u32 aql_txq_limit_bc;
 	u32 aql_txq_limit_low[IEEE80211_NUM_ACS];
 	u32 aql_txq_limit_high[IEEE80211_NUM_ACS];
 	u32 aql_threshold;
 	atomic_t aql_total_pending_airtime;
+	atomic_t aql_bc_pending_airtime;
 	atomic_t aql_ac_pending_airtime[IEEE80211_NUM_ACS];
 
 	const struct ieee80211_ops *ops;
@@ -2021,6 +2025,13 @@ int ieee80211_mesh_finish_csa(struct ieee80211_sub_if_data *sdata,
 			      u64 *changed);
 
 /* scan/BSS handling */
+u32 ieee80211_scan_req_radio_mask(struct ieee80211_local *local,
+				  struct cfg80211_scan_request *req);
+bool ieee80211_scanning_busy(struct ieee80211_local *local,
+			     struct cfg80211_chan_def *chandef);
+u32 ieee80211_can_leave_ch(struct ieee80211_sub_if_data *sdata,
+			   struct cfg80211_scan_request *req,
+			   u32 radio_mask);
 void ieee80211_scan_work(struct wiphy *wiphy, struct wiphy_work *work);
 int ieee80211_request_ibss_scan(struct ieee80211_sub_if_data *sdata,
 				const u8 *ssid, u8 ssid_len,
@@ -2059,6 +2070,7 @@ void ieee80211_sched_scan_stopped_work(struct wiphy *wiphy,
 /* off-channel/mgmt-tx */
 void ieee80211_offchannel_stop_vifs(struct ieee80211_local *local);
 void ieee80211_offchannel_return(struct ieee80211_local *local);
+u32 ieee80211_offchannel_radio_mask(struct ieee80211_local *local);
 void ieee80211_roc_setup(struct ieee80211_local *local);
 void ieee80211_start_next_roc(struct ieee80211_local *local);
 void ieee80211_reconfig_roc(struct ieee80211_local *local);
@@ -2720,6 +2732,8 @@ bool ieee80211_chandef_s1g_oper(struct ieee80211_local *local,
 				struct cfg80211_chan_def *chandef);
 void ieee80211_chandef_downgrade(struct cfg80211_chan_def *chandef,
 				 struct ieee80211_conn_settings *conn);
+u32 ieee80211_chandef_radio_mask(struct ieee80211_local *local,
+				 struct cfg80211_chan_def *chandef);
 static inline void
 ieee80211_chanreq_downgrade(struct ieee80211_chan_req *chanreq,
 			    struct ieee80211_conn_settings *conn)
@@ -2774,7 +2788,7 @@ void ieee80211_recalc_smps_chanctx(struct ieee80211_local *local,
 				   struct ieee80211_chanctx *chanctx);
 void ieee80211_recalc_chanctx_min_def(struct ieee80211_local *local,
 				      struct ieee80211_chanctx *ctx);
-bool ieee80211_is_radar_required(struct ieee80211_local *local,
+bool ieee80211_is_radar_required(struct ieee80211_local *local, u32 radio_mask,
 				 struct cfg80211_scan_request *req);
 bool ieee80211_is_radio_idx_in_scan_req(struct wiphy *wiphy,
 					struct cfg80211_scan_request *scan_req,
@@ -2828,6 +2842,11 @@ u8 *ieee80211_get_bssid(struct ieee80211_hdr *hdr, size_t len,
 
 extern const struct ethtool_ops ieee80211_ethtool_ops;
 
+u32 ieee80211_rate_expected_tx_airtime(struct ieee80211_hw *hw,
+				       struct ieee80211_tx_rate *tx_rate,
+				       struct rate_info *ri,
+				       enum nl80211_band band,
+				       bool ampdu, int len);
 u32 ieee80211_calc_expected_tx_airtime(struct ieee80211_hw *hw,
 				       struct ieee80211_vif *vif,
 				       struct ieee80211_sta *pubsta,
