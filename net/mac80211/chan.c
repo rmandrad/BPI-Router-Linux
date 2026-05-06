@@ -1104,6 +1104,9 @@ static int ieee80211_assign_link_chanctx(struct ieee80211_link_data *link,
 			ieee80211_vif_cfg_change_notify(sdata, BSS_CHANGED_IDLE);
 	}
 
+	if (conf)
+		drv_set_qos_map(local, sdata);
+
 	ieee80211_check_fast_xmit_iface(sdata);
 
 	return ret;
@@ -1595,6 +1598,8 @@ ieee80211_link_use_reserved_assign(struct ieee80211_link_data *link)
 
 		goto out;
 	}
+
+	link->radar_required = link->reserved_radar_required;
 
 out:
 	ieee80211_link_chanctx_reservation_complete(link);

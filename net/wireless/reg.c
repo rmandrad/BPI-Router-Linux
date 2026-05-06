@@ -4229,7 +4229,8 @@ static void cfg80211_check_and_end_cac(struct cfg80211_registered_device *rdev)
 				continue;
 
 			chandef = wdev_chandef(wdev, link_id);
-			if (!chandef)
+			if (!chandef || !chandef->chan ||
+			    chandef->chan->band != NL80211_BAND_5GHZ)
 				continue;
 
 			if (!cfg80211_chandef_dfs_usable(&rdev->wiphy, chandef))

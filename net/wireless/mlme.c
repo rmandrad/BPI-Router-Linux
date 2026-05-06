@@ -1259,6 +1259,19 @@ void cfg80211_background_cac_abort(struct wiphy *wiphy)
 }
 EXPORT_SYMBOL(cfg80211_background_cac_abort);
 
+void cfg80211_background_radar_update_channel(struct wiphy *wiphy,
+					      const struct cfg80211_chan_def *chandef,
+					      bool expand)
+{
+	enum nl80211_radar_event event;
+
+	event = expand ? NL80211_RADAR_BACKGROUND_CHAN_EXPAND :
+			 NL80211_RADAR_BACKGROUND_CHAN_UPDATE;
+	nl80211_radar_notify(wiphy_to_rdev(wiphy), chandef, event, NULL,
+			     GFP_ATOMIC);
+}
+EXPORT_SYMBOL(cfg80211_background_radar_update_channel);
+
 int
 cfg80211_start_background_radar_detection(struct cfg80211_registered_device *rdev,
 					  struct wireless_dev *wdev,

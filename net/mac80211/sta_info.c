@@ -1683,6 +1683,11 @@ int __sta_info_flush(struct ieee80211_sub_if_data *sdata, bool vlans,
 		    !(sta->sta.valid_links & BIT(link_id)))
 			continue;
 
+		if (link_id >= 0 && (sta->sta.valid_links & ~BIT(link_id))) {
+			ieee80211_sta_remove_link(sta, link_id);
+			continue;
+		}
+
 		if (!WARN_ON(__sta_info_destroy_part1(sta)))
 			list_add(&sta->free_list, &free_list);
 

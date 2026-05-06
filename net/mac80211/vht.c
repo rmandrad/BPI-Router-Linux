@@ -469,6 +469,37 @@ ieee80211_sta_cap_chan_bw(struct link_sta_info *link_sta)
 	return NL80211_CHAN_WIDTH_80;
 }
 
+enum ieee80211_sta_rx_bandwidth
+ieee80211_link_sta_cap_bw(struct ieee80211_link_sta *pub)
+{
+	struct sta_info *sta = container_of(pub->sta, struct sta_info, sta);
+	struct link_sta_info *link_sta;
+	enum ieee80211_sta_rx_bandwidth bw;
+
+	rcu_read_lock();
+	link_sta = rcu_dereference(sta->link[pub->link_id]);
+	bw = ieee80211_sta_cap_rx_bw(link_sta);
+	rcu_read_unlock();
+
+	return bw;
+}
+EXPORT_SYMBOL(ieee80211_link_sta_cap_bw);
+
+u8 ieee80211_link_sta_cap_nss(struct ieee80211_link_sta *pub)
+{
+	struct sta_info *sta = container_of(pub->sta, struct sta_info, sta);
+	struct link_sta_info *link_sta;
+	u8 nss;
+
+	rcu_read_lock();
+	link_sta = rcu_dereference(sta->link[pub->link_id]);
+	nss = link_sta->capa_nss;
+	rcu_read_unlock();
+
+	return nss;
+}
+EXPORT_SYMBOL(ieee80211_link_sta_cap_nss);
+
 enum nl80211_chan_width
 ieee80211_sta_rx_bw_to_chan_width(struct link_sta_info *link_sta)
 {
@@ -710,6 +741,9 @@ u32 __ieee80211_vht_handle_opmode(struct ieee80211_sub_if_data *sdata,
 	if (sta_opmode.changed)
 		cfg80211_sta_opmode_change_notify(sdata->dev, link_sta->addr,
 						  &sta_opmode, GFP_KERNEL);
+
+	if (changed)
+		changed |= IEEE80211_RC_VHT_OMN_CHANGED;
 
 	return changed;
 }

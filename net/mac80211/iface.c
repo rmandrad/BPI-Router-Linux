@@ -402,8 +402,14 @@ static int ieee80211_check_concurrent_iface(struct ieee80211_sub_if_data *sdata,
 			 * can only add VLANs to enabled APs
 			 */
 			if (iftype == NL80211_IFTYPE_AP_VLAN &&
-			    nsdata->vif.type == NL80211_IFTYPE_AP)
+			    nsdata->vif.type == NL80211_IFTYPE_AP) {
 				sdata->bss = &nsdata->u.ap;
+
+				rcu_read_lock();
+				rcu_assign_pointer(sdata->qos_map,
+						   rcu_dereference(nsdata->qos_map));
+				rcu_read_unlock();
+			}
 		}
 	}
 
@@ -815,6 +821,7 @@ static int ieee80211_stop(struct net_device *dev)
 	guard(wiphy)(sdata->local->hw.wiphy);
 
 	wiphy_work_cancel(sdata->local->hw.wiphy, &sdata->activate_links_work);
+	wiphy_work_cancel(sdata->local->hw.wiphy, &sdata->links_removed_work);
 
 	/* Close the dependent MBSSID interfaces with wiphy lock as we may be
 	 * terminating its partner links too in case of MLD.
@@ -1850,6 +1857,22 @@ static void ieee80211_activate_links_work(struct wiphy *wiphy,
 	sdata->desired_active_links = 0;
 }
 
+static void ieee80211_links_removed_work(struct wiphy *wiphy,
+					 struct wiphy_work *work)
+{
+	struct ieee80211_sub_if_data *sdata =
+		container_of(work, struct ieee80211_sub_if_data,
+			     links_removed_work);
+
+	lockdep_assert_wiphy(sdata->local->hw.wiphy);
+
+	if (!ieee80211_sdata_running(sdata))
+		return;
+
+	cfg80211_links_removed(sdata->dev, sdata->removed_links);
+	sdata->removed_links = 0;
+}
+
 /*
  * Helper function to initialise an interface to a specific type.
  */
@@ -1888,6 +1911,8 @@ static void ieee80211_setup_sdata(struct ieee80211_sub_if_data *sdata,
 	wiphy_work_init(&sdata->work, ieee80211_iface_work);
 	wiphy_work_init(&sdata->activate_links_work,
 			ieee80211_activate_links_work);
+	wiphy_work_init(&sdata->links_removed_work,
+			ieee80211_links_removed_work);
 
 	switch (type) {
 	case NL80211_IFTYPE_P2P_GO:

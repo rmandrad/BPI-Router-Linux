@@ -16,9 +16,14 @@ static int ___cfg80211_stop_ap(struct cfg80211_registered_device *rdev,
 			       bool notify)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
-	int err;
+	u16 beaconing_links = 0;
+	int err, i;
 
 	lockdep_assert_wiphy(wdev->wiphy);
+
+	for_each_valid_link(wdev, i)
+		if (wdev->links[i].ap.beacon_interval)
+			beaconing_links |= BIT(i);
 
 	if (!rdev->ops->stop_ap)
 		return -EOPNOTSUPP;
@@ -35,19 +40,22 @@ static int ___cfg80211_stop_ap(struct cfg80211_registered_device *rdev,
 
 	err = rdev_stop_ap(rdev, dev, link_id);
 	if (!err) {
-		wdev->conn_owner_nlportid = 0;
 		wdev->links[link_id].ap.beacon_interval = 0;
 		memset(&wdev->links[link_id].ap.chandef, 0,
 		       sizeof(wdev->links[link_id].ap.chandef));
-		wdev->u.ap.ssid_len = 0;
-		rdev_set_qos_map(rdev, dev, NULL);
+		if (hweight16(beaconing_links) <= 1) {
+			wdev->conn_owner_nlportid = 0;
+			wdev->u.ap.ssid_len = 0;
+			rdev_set_qos_map(rdev, dev, NULL);
+		}
 		if (notify)
 			nl80211_send_ap_stopped(wdev, link_id);
 
 		cfg80211_sched_dfs_chan_update(rdev);
 	}
 
-	schedule_work(&cfg80211_disconnect_work);
+	if (hweight16(beaconing_links) <= 1)
+		schedule_work(&cfg80211_disconnect_work);
 
 	return err;
 }

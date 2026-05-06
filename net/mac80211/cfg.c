@@ -1912,10 +1912,12 @@ static int ieee80211_stop_ap(struct wiphy *wiphy, struct net_device *dev,
 	RCU_INIT_POINTER(link_conf->tx_bss_conf, NULL);
 
 	link_conf->enable_beacon = false;
-	sdata->beacon_rate_set = false;
-	sdata->vif.cfg.ssid_len = 0;
-	sdata->vif.cfg.s1g = false;
-	clear_bit(SDATA_STATE_OFFCHANNEL_BEACON_STOPPED, &sdata->state);
+	if (ieee80211_num_beaconing_links(sdata) <= 1) {
+		sdata->beacon_rate_set = false;
+		sdata->vif.cfg.ssid_len = 0;
+		sdata->vif.cfg.s1g = false;
+		clear_bit(SDATA_STATE_OFFCHANNEL_BEACON_STOPPED, &sdata->state);
+	}
 	ieee80211_link_info_change_notify(sdata, link,
 					  BSS_CHANGED_BEACON_ENABLED);
 
@@ -1929,9 +1931,11 @@ static int ieee80211_stop_ap(struct wiphy *wiphy, struct net_device *dev,
 
 	drv_stop_ap(sdata->local, sdata, link_conf);
 
-	/* free all potentially still buffered bcast frames */
-	local->total_ps_buffered -= skb_queue_len(&sdata->u.ap.ps.bc_buf);
-	ieee80211_purge_tx_queue(&local->hw, &sdata->u.ap.ps.bc_buf);
+	if (ieee80211_num_beaconing_links(sdata) <= 1) {
+		/* free all potentially still buffered bcast frames */
+		local->total_ps_buffered -= skb_queue_len(&sdata->u.ap.ps.bc_buf);
+		ieee80211_purge_tx_queue(&local->hw, &sdata->u.ap.ps.bc_buf);
+	}
 
 	ieee80211_link_copy_chanctx_to_vlans(link, true);
 	ieee80211_link_release_channel(link);
@@ -4180,6 +4184,8 @@ static int __ieee80211_csa_finalize(struct ieee80211_link_data *link_data)
 		return err;
 
 	ieee80211_link_info_change_notify(sdata, link_data, changed);
+	ieee80211_crit_update_notify(&sdata->vif, link_data->link_id,
+				     NL80211_CRIT_UPDATE_SINGLE, GFP_KERNEL);
 
 	ieee80211_vif_unblock_queues_csa(sdata);
 
@@ -4716,7 +4722,11 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 
 	info->flags |= IEEE80211_TX_CTL_REQ_TX_STATUS |
 		       IEEE80211_TX_INTFL_NL80211_FRAME_TX;
-	info->control.flags |= u32_encode_bits(link_id, IEEE80211_TX_CTRL_MLO_LINK);
+	if (ieee80211_vif_is_mld(&sdata->vif))
+		info->control.flags |= IEEE80211_TX_CTRL_MLO_LINK_UNSPEC;
+	else
+		info->control.flags |= u32_encode_bits(link_id,
+						       IEEE80211_TX_CTRL_MLO_LINK);
 	info->band = band;
 
 	skb_set_queue_mapping(skb, IEEE80211_AC_VO);
@@ -4786,8 +4796,12 @@ static int ieee80211_set_qos_map(struct wiphy *wiphy,
 				 struct net_device *dev,
 				 struct cfg80211_qos_map *qos_map)
 {
-	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
+	struct ieee80211_sub_if_data *vlan, *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
 	struct mac80211_qos_map *new_qos_map, *old_qos_map;
+	int ret;
+
+	if (!(sdata->flags & IEEE80211_SDATA_IN_DRIVER))
+		return -EIO;
 
 	if (qos_map) {
 		new_qos_map = kzalloc_obj(*new_qos_map);
@@ -4804,7 +4818,13 @@ static int ieee80211_set_qos_map(struct wiphy *wiphy,
 	if (old_qos_map)
 		kfree_rcu(old_qos_map, rcu_head);
 
-	return 0;
+	if (sdata->vif.type == NL80211_IFTYPE_AP) {
+		list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list)
+			rcu_assign_pointer(vlan->qos_map, new_qos_map);
+	}
+
+	ret = drv_set_qos_map(sdata->local, sdata);
+	return ret == -EOPNOTSUPP ? 0 : ret;
 }
 
 static int ieee80211_set_ap_chanwidth(struct wiphy *wiphy,
@@ -5322,6 +5342,38 @@ void ieee80211_color_change_finish(struct ieee80211_vif *vif, u8 link_id)
 	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(ieee80211_color_change_finish);
+
+void ieee80211_crit_update_notify(struct ieee80211_vif *vif,
+				  unsigned int link_id,
+				  enum nl80211_crit_update_event event,
+				  gfp_t gfp)
+{
+	if (!ieee80211_vif_is_mld(vif) ||
+	    WARN_ON(link_id >= IEEE80211_MLD_MAX_NUM_LINKS))
+		return;
+
+	cfg80211_crit_update_notify(ieee80211_vif_to_wdev(vif), link_id,
+				    event, gfp);
+}
+EXPORT_SYMBOL_GPL(ieee80211_crit_update_notify);
+
+void ieee80211_tsf_offset_notify(struct ieee80211_vif *vif,
+				 unsigned int link_id,
+				 s64 *tsf_offset, size_t len, gfp_t gfp)
+{
+	cfg80211_tsf_offset_notify(ieee80211_vif_to_wdev(vif), link_id,
+				   tsf_offset, len, gfp);
+}
+EXPORT_SYMBOL_GPL(ieee80211_tsf_offset_notify);
+
+void ieee80211_links_removed(struct ieee80211_vif *vif, u16 removed_links)
+{
+	struct ieee80211_sub_if_data *sdata = vif_to_sdata(vif);
+
+	sdata->removed_links = removed_links;
+	wiphy_work_queue(sdata->local->hw.wiphy, &sdata->links_removed_work);
+}
+EXPORT_SYMBOL_GPL(ieee80211_links_removed);
 
 void
 ieee80211_obss_color_collision_notify(struct ieee80211_vif *vif,

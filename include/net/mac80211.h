@@ -3863,6 +3863,8 @@ enum ieee80211_rate_control_changed {
 	IEEE80211_RC_SUPP_RATES_CHANGED	= BIT(2),
 	IEEE80211_RC_NSS_CHANGED	= BIT(3),
 	/* Defined for mtk vendor command */
+	IEEE80211_RC_VHT_OMN_CHANGED	= BIT(6),
+	/* Defined for mtk vendor command */
 	IEEE80211_RC_CODING_TYPE_CHANGED= BIT(7),
 };
 
@@ -4980,6 +4982,8 @@ struct ieee80211_ops {
 			       struct ieee80211_vif *vif,
 			       struct ieee80211_sta *sta,
 			       struct ieee80211_eml_params *eml_params);
+	int (*set_qos_map)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+			   struct cfg80211_qos_map *qos_map);
 };
 
 /**
@@ -8007,6 +8011,22 @@ int ieee80211_emulate_switch_vif_chanctx(struct ieee80211_hw *hw,
  * @hw: pointer as obtained from ieee80211_alloc_hw()
  */
 unsigned long ieee80211_get_scanning(struct ieee80211_hw *hw);
+
+void ieee80211_crit_update_notify(struct ieee80211_vif *vif,
+				  unsigned int link_id,
+				  enum nl80211_crit_update_event event,
+				  gfp_t gfp);
+
+void ieee80211_tsf_offset_notify(struct ieee80211_vif *vif,
+				 unsigned int link_id,
+				 s64 *tsf_offset, size_t len, gfp_t gfp);
+
+void ieee80211_links_removed(struct ieee80211_vif *vif, u16 removed_links);
+
+enum ieee80211_sta_rx_bandwidth
+ieee80211_link_sta_cap_bw(struct ieee80211_link_sta *pub);
+
+u8 ieee80211_link_sta_cap_nss(struct ieee80211_link_sta *pub);
 
 /**
  * ieee80211_vif_nan_started - Return whether a NAN vif is started

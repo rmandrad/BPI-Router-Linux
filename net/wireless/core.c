@@ -631,10 +631,7 @@ int wiphy_verify_iface_combinations(struct wiphy *wiphy,
 		 * for multi-radio global combination, since it hold
 		 * the capabilities of all radio combinations.
 		 */
-		if (!combined_radio &&
-		    WARN_ON(c->radar_detect_widths &&
-			    c->num_different_channels > 1))
-			return -EINVAL;
+		/* Allow MLO DFS/radar detection across multiple channels. */
 
 		if (WARN_ON(!c->n_limits))
 			return -EINVAL;

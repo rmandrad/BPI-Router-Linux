@@ -3575,7 +3575,9 @@ ieee80211_xmit_fast_finish(struct ieee80211_sub_if_data *sdata,
 	if (key)
 		info->control.hw_key = &key->conf;
 
-	dev_sw_netstats_tx_add(skb->dev, 1, skb->len);
+	if (!wiphy_ext_feature_isset(sta->local->hw.wiphy,
+				     NL80211_EXT_FEATURE_STAS_COUNT))
+		dev_sw_netstats_tx_add(skb->dev, 1, skb->len);
 
 	if (hdr->frame_control & cpu_to_le16(IEEE80211_STYPE_QOS_DATA)) {
 		tid = skb->priority & IEEE80211_QOS_CTL_TAG1D_MASK;
@@ -4357,7 +4359,10 @@ void __ieee80211_subif_start_xmit(struct sk_buff *skb,
 			goto out;
 		}
 
-		dev_sw_netstats_tx_add(dev, 1, skb->len);
+		if (!wiphy_ext_feature_isset(sdata->local->hw.wiphy,
+					     NL80211_EXT_FEATURE_STAS_COUNT) ||
+		    !sta)
+			dev_sw_netstats_tx_add(dev, 1, skb->len);
 
 		ieee80211_xmit(sdata, sta, skb);
 	}
@@ -4695,7 +4700,9 @@ static void ieee80211_8023_xmit(struct ieee80211_sub_if_data *sdata,
 			info->status_data_idr = 1;
 	}
 
-	dev_sw_netstats_tx_add(dev, skbs, len);
+	if (!wiphy_ext_feature_isset(sta->local->hw.wiphy,
+				     NL80211_EXT_FEATURE_STAS_COUNT))
+		dev_sw_netstats_tx_add(dev, skbs, len);
 	sta->deflink.tx_stats.packets[queue] += skbs;
 	sta->deflink.tx_stats.bytes[queue] += len;
 

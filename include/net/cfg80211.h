@@ -9305,6 +9305,10 @@ cfg80211_background_radar_event(struct wiphy *wiphy,
 	__cfg80211_radar_event(wiphy, chandef, true, gfp);
 }
 
+void cfg80211_background_radar_update_channel(struct wiphy *wiphy,
+					      const struct cfg80211_chan_def *chandef,
+					      bool expand);
+
 /**
  * cfg80211_sta_opmode_change_notify - STA's ht/vht operation mode change event
  * @dev: network device
@@ -10345,6 +10349,15 @@ void cfg80211_mlo_reconf_add_done(struct net_device *dev,
  * hold anymore.
  */
 void cfg80211_schedule_channels_check(struct wireless_dev *wdev);
+
+void cfg80211_crit_update_notify(struct wireless_dev *wdev,
+				 unsigned int link_id,
+				 enum nl80211_crit_update_event event,
+				 gfp_t gfp);
+
+void cfg80211_tsf_offset_notify(struct wireless_dev *wdev,
+				unsigned int link_id,
+				s64 *tsf_offset, size_t len, gfp_t gfp);
 
 /**
  * cfg80211_epcs_changed - Notify about a change in EPCS state

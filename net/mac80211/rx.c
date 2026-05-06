@@ -2776,7 +2776,10 @@ ieee80211_deliver_skb(struct ieee80211_rx_data *rx)
 	skb = rx->skb;
 	xmit_skb = NULL;
 
-	dev_sw_netstats_rx_add(dev, skb->len);
+	if (!wiphy_ext_feature_isset(sdata->local->hw.wiphy,
+				     NL80211_EXT_FEATURE_STAS_COUNT) ||
+	    !rx->sta)
+		dev_sw_netstats_rx_add(dev, skb->len);
 
 	if (rx->sta) {
 		/* The seqno index has the same property as needed
@@ -4890,7 +4893,9 @@ static void ieee80211_rx_8023(struct ieee80211_rx_data *rx,
 
 	skb->dev = fast_rx->dev;
 
-	dev_sw_netstats_rx_add(fast_rx->dev, skb->len);
+	if (!wiphy_ext_feature_isset(sta->local->hw.wiphy,
+				     NL80211_EXT_FEATURE_STAS_COUNT))
+		dev_sw_netstats_rx_add(fast_rx->dev, skb->len);
 
 	/* The seqno index has the same property as needed
 	 * for the rx_msdu field, i.e. it is IEEE80211_NUM_TIDS

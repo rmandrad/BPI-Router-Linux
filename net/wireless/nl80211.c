@@ -928,6 +928,9 @@ static const struct nla_policy nl80211_policy[NUM_NL80211_ATTR] = {
 	[NL80211_ATTR_BSS_DUMP_INCLUDE_USE_DATA] = { .type = NLA_FLAG },
 	[NL80211_ATTR_MLO_TTLM_DLINK] = NLA_POLICY_EXACT_LEN(sizeof(u16) * 8),
 	[NL80211_ATTR_MLO_TTLM_ULINK] = NLA_POLICY_EXACT_LEN(sizeof(u16) * 8),
+	[NL80211_ATTR_CRTI_UPDATE_EVENT] = { .type = NLA_U8 },
+	[NL80211_ATTR_MLO_TSF_OFFSET_VAL] =
+		NLA_POLICY_EXACT_LEN(IEEE80211_MLD_MAX_NUM_LINKS * sizeof(s64)),
 	[NL80211_ATTR_ASSOC_SPP_AMSDU] = { .type = NLA_FLAG },
 	[NL80211_ATTR_VIF_RADIO_MASK] = { .type = NLA_U32 },
 	[NL80211_ATTR_SUPPORTED_SELECTORS] =
@@ -3928,6 +3931,7 @@ static int nl80211_set_wiphy(struct sk_buff *skb, struct genl_info *info)
 			return -EINVAL;
 
 		if (netdev->ieee80211_ptr->iftype != NL80211_IFTYPE_AP &&
+		    netdev->ieee80211_ptr->iftype != NL80211_IFTYPE_STATION &&
 		    netdev->ieee80211_ptr->iftype != NL80211_IFTYPE_P2P_GO)
 			return -EINVAL;
 
@@ -6829,6 +6833,11 @@ static int nl80211_start_ap(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	cfg80211_set_dfs_concurrent(&rdev->wiphy, &params->chandef);
+
+	if (rdev->background_radar_wdev &&
+	    cfg80211_is_sub_chan(&params->chandef,
+				 rdev->background_radar_chandef.chan, false))
+		cfg80211_stop_background_radar_detection(rdev->background_radar_wdev);
 
 	beacon_check.iftype = wdev->iftype;
 	beacon_check.relax = true;
@@ -20011,7 +20020,8 @@ void cfg80211_links_removed(struct net_device *dev, u16 link_mask)
 	trace_cfg80211_links_removed(dev, link_mask);
 
 	if (WARN_ON(wdev->iftype != NL80211_IFTYPE_STATION &&
-		    wdev->iftype != NL80211_IFTYPE_P2P_CLIENT))
+		    wdev->iftype != NL80211_IFTYPE_P2P_CLIENT &&
+		    wdev->iftype != NL80211_IFTYPE_AP))
 		return;
 
 	if (WARN_ON(!wdev->valid_links || !link_mask ||
@@ -20019,8 +20029,10 @@ void cfg80211_links_removed(struct net_device *dev, u16 link_mask)
 		    wdev->valid_links == link_mask))
 		return;
 
-	cfg80211_wdev_release_link_bsses(wdev, link_mask);
-	wdev->valid_links &= ~link_mask;
+	if (wdev->iftype != NL80211_IFTYPE_AP) {
+		cfg80211_wdev_release_link_bsses(wdev, link_mask);
+		wdev->valid_links &= ~link_mask;
+	}
 
 	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_KERNEL);
 	if (!msg)
@@ -21914,6 +21926,83 @@ nla_put_failure:
 	nlmsg_free(msg);
 }
 EXPORT_SYMBOL(cfg80211_update_owe_info_event);
+
+void cfg80211_crit_update_notify(struct wireless_dev *wdev,
+				 unsigned int link_id,
+				 enum nl80211_crit_update_event event,
+				 gfp_t gfp)
+{
+	struct wiphy *wiphy = wdev->wiphy;
+	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wiphy);
+	struct sk_buff *msg;
+	void *hdr;
+
+	if (wdev->valid_links && !(wdev->valid_links & BIT(link_id)))
+		return;
+
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, gfp);
+	if (!msg)
+		return;
+
+	hdr = nl80211hdr_put(msg, 0, 0, 0, NL80211_CMD_NOTIFY_CRIT_UPDATE);
+	if (!hdr) {
+		nlmsg_free(msg);
+		return;
+	}
+
+	if (nla_put_u32(msg, NL80211_ATTR_WIPHY, rdev->wiphy_idx) ||
+	    nla_put_u32(msg, NL80211_ATTR_IFINDEX, wdev->netdev->ifindex) ||
+	    nla_put_u64_64bit(msg, NL80211_ATTR_WDEV, wdev_id(wdev),
+			      NL80211_ATTR_PAD) ||
+	    (wdev->valid_links &&
+	     nla_put_u8(msg, NL80211_ATTR_MLO_LINK_ID, link_id)) ||
+	    nla_put_u8(msg, NL80211_ATTR_CRTI_UPDATE_EVENT, event))
+		goto nla_put_failure;
+
+	genlmsg_end(msg, hdr);
+	genlmsg_multicast_netns(&nl80211_fam, wiphy_net(wiphy), msg, 0,
+				NL80211_MCGRP_MLME, gfp);
+	return;
+
+nla_put_failure:
+	nlmsg_free(msg);
+}
+EXPORT_SYMBOL(cfg80211_crit_update_notify);
+
+void cfg80211_tsf_offset_notify(struct wireless_dev *wdev,
+				unsigned int link_id,
+				s64 *tsf_offset, size_t len, gfp_t gfp)
+{
+	struct wiphy *wiphy = wdev->wiphy;
+	struct sk_buff *msg;
+	void *hdr;
+
+	msg = nlmsg_new(NLMSG_DEFAULT_SIZE, gfp);
+	if (!msg)
+		return;
+
+	hdr = nl80211hdr_put(msg, 0, 0, 0, NL80211_CMD_TSF_OFFSET_EVENT);
+	if (!hdr) {
+		nlmsg_free(msg);
+		return;
+	}
+
+	if (wdev->valid_links &&
+	    nla_put_u8(msg, NL80211_ATTR_MLO_LINK_ID, link_id))
+		goto nla_put_failure;
+
+	if (nla_put(msg, NL80211_ATTR_MLO_TSF_OFFSET_VAL, len, tsf_offset))
+		goto nla_put_failure;
+
+	genlmsg_end(msg, hdr);
+	genlmsg_multicast_netns(&nl80211_fam, wiphy_net(wiphy), msg, 0,
+				NL80211_MCGRP_MLME, gfp);
+	return;
+
+nla_put_failure:
+	nlmsg_free(msg);
+}
+EXPORT_SYMBOL(cfg80211_tsf_offset_notify);
 
 void cfg80211_schedule_channels_check(struct wireless_dev *wdev)
 {

@@ -1103,10 +1103,12 @@ ieee80211_ifcomb_check(const struct ieee80211_iface_combination *c, int n_comb)
 	int i, j;
 
 	for (i = 0; i < n_comb; i++, c++) {
+#if 0
 		/* DFS is not supported with multi-channel combinations yet */
 		if (c->radar_detect_widths &&
 		    c->num_different_channels > 1)
 			return false;
+#endif
 
 		/* mac80211 doesn't support more than one IBSS interface */
 		for (j = 0; j < c->n_limits; j++)

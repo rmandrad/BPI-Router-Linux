@@ -3409,6 +3409,12 @@ TRACE_EVENT(bss_color_bitmap,
 		"color=%u color_bitmap=0x%llx", __entry->color, __entry->color_bitmap
 	)
 );
+
+DEFINE_EVENT(local_sdata_evt, drv_set_qos_map,
+	TP_PROTO(struct ieee80211_local *local,
+		 struct ieee80211_sub_if_data *sdata),
+	TP_ARGS(local, sdata)
+);
 #endif /* !__MAC80211_DRIVER_TRACE || TRACE_HEADER_MULTI_READ */
 
 #undef TRACE_INCLUDE_PATH
