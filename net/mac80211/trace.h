@@ -1492,15 +1492,17 @@ DEFINE_EVENT(local_only_evt, drv_offchannel_tx_cancel_wait,
 TRACE_EVENT(drv_set_bitrate_mask,
 	TP_PROTO(struct ieee80211_local *local,
 		 struct ieee80211_sub_if_data *sdata,
-		 const struct cfg80211_bitrate_mask *mask),
+		 const struct cfg80211_bitrate_mask *mask,
+		 unsigned int link_id),
 
-	TP_ARGS(local, sdata, mask),
+	TP_ARGS(local, sdata, mask, link_id),
 
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
 		VIF_ENTRY
 		__field(u32, legacy_2g)
 		__field(u32, legacy_5g)
+		__field(unsigned int, link_id)
 	),
 
 	TP_fast_assign(
@@ -1508,11 +1510,13 @@ TRACE_EVENT(drv_set_bitrate_mask,
 		VIF_ASSIGN;
 		__entry->legacy_2g = mask->control[NL80211_BAND_2GHZ].legacy;
 		__entry->legacy_5g = mask->control[NL80211_BAND_5GHZ].legacy;
+		__entry->link_id = link_id;
 	),
 
 	TP_printk(
-		LOCAL_PR_FMT  VIF_PR_FMT " 2G Mask:0x%x 5G Mask:0x%x",
-		LOCAL_PR_ARG, VIF_PR_ARG, __entry->legacy_2g, __entry->legacy_5g
+		LOCAL_PR_FMT  VIF_PR_FMT " 2G Mask:0x%x 5G Mask:0x%x, link_id: %d",
+		LOCAL_PR_ARG, VIF_PR_ARG, __entry->legacy_2g, __entry->legacy_5g,
+		__entry->link_id
 	)
 );
 
@@ -3385,6 +3389,26 @@ TRACE_EVENT(drv_set_eml_op_mode,
 	)
 );
 
+TRACE_EVENT(bss_color_bitmap,
+	TP_PROTO(u8 color,
+		u64 color_bitmap),
+
+	TP_ARGS(color, color_bitmap),
+
+	TP_STRUCT__entry(
+		__field(u8, color)
+		__field(u64, color_bitmap)
+	),
+
+	TP_fast_assign(
+		__entry->color = color;
+		__entry->color_bitmap = color_bitmap;
+	),
+
+	TP_printk(
+		"color=%u color_bitmap=0x%llx", __entry->color, __entry->color_bitmap
+	)
+);
 #endif /* !__MAC80211_DRIVER_TRACE || TRACE_HEADER_MULTI_READ */
 
 #undef TRACE_INCLUDE_PATH

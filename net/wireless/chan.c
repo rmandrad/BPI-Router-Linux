@@ -14,6 +14,8 @@
 #include <net/cfg80211.h>
 #include "core.h"
 #include "rdev-ops.h"
+#include "nl80211.h"
+#include "reg.h"
 
 static bool cfg80211_valid_60g_freq(u32 freq)
 {
@@ -1146,6 +1148,16 @@ cfg80211_chandef_dfs_cac_time(struct wiphy *wiphy,
 		if (!(c->flags & IEEE80211_CHAN_RADAR))
 			continue;
 
+		/* weather radar in ETSI */
+		if (reg_get_dfs_region(wiphy) == NL80211_DFS_ETSI &&
+		    freq >= MHZ_TO_KHZ(5600) && freq <= MHZ_TO_KHZ(5640) &&
+		    c->dfs_state == NL80211_DFS_USABLE) {
+			if (cf == 1 && t1 < IEEE80211_DFS_WEATHER_MIN_CAC_TIME_MS)
+				t1 = IEEE80211_DFS_WEATHER_MIN_CAC_TIME_MS;
+			if (cf == 2 && t2 < IEEE80211_DFS_WEATHER_MIN_CAC_TIME_MS)
+				t2 = IEEE80211_DFS_WEATHER_MIN_CAC_TIME_MS;
+		}
+
 		if (cf == 1 && c->dfs_cac_ms > t1)
 			t1 = c->dfs_cac_ms;
 
@@ -1672,6 +1684,77 @@ bool cfg80211_any_usable_channels(struct wiphy *wiphy,
 	return false;
 }
 EXPORT_SYMBOL(cfg80211_any_usable_channels);
+
+static void cfg80211_sta_radar_notify(struct wiphy *wiphy,
+				      const struct cfg80211_chan_def *chandef,
+				      enum nl80211_radar_event event)
+{
+	struct wireless_dev *wdev;
+
+	list_for_each_entry(wdev, &wiphy->wdev_list, list) {
+		if (cfg80211_chandef_dfs_required(wiphy, chandef, wdev->iftype) > 0) {
+			nl80211_radar_notify(wiphy_to_rdev(wiphy), chandef,
+					     event, wdev->netdev, GFP_KERNEL);
+			return;
+		}
+	}
+}
+
+void cfg80211_sta_update_dfs_state(struct wireless_dev *wdev,
+				   const struct cfg80211_chan_def *bss_chandef,
+				   const struct cfg80211_chan_def *csa_chandef,
+				   bool associated)
+{
+	bool csa_active = !!csa_chandef;
+	enum nl80211_dfs_state dfs_state = NL80211_DFS_USABLE;
+	enum nl80211_radar_event event = NL80211_RADAR_STA_CAC_EXPIRED;
+
+	lockdep_assert_wiphy(wdev->wiphy);
+
+	if (!bss_chandef || !bss_chandef->chan ||
+	    bss_chandef->chan->band != NL80211_BAND_5GHZ)
+		return;
+
+	/* assume csa channel is cac completed */
+	if (csa_active &&
+	    (cfg80211_chandef_dfs_usable(wdev->wiphy, csa_chandef) ||
+	    cfg80211_chandef_dfs_available(wdev->wiphy, csa_chandef))) {
+		cfg80211_set_dfs_state(wdev->wiphy, csa_chandef, NL80211_DFS_AVAILABLE);
+		cfg80211_sta_radar_notify(wdev->wiphy, csa_chandef,
+					  NL80211_RADAR_STA_CAC_SKIPPED);
+		netdev_info(wdev->netdev, "Set CSA channel's DFS state to available\n");
+	}
+
+	/* avoid updating the dfs state during nop */
+	if (!cfg80211_chandef_dfs_usable(wdev->wiphy, bss_chandef) &&
+	    !cfg80211_chandef_dfs_available(wdev->wiphy, bss_chandef))
+		return;
+
+	if (associated && !csa_active) {
+		dfs_state = NL80211_DFS_AVAILABLE;
+		event = NL80211_RADAR_STA_CAC_SKIPPED;
+	}
+
+	/* avoid setting the dfs state to usable
+	 * when other interfaces still operate on this channel
+	 */
+	if (dfs_state == NL80211_DFS_USABLE &&
+	    (cfg80211_is_wiphy_oper_chan(wdev->wiphy, bss_chandef->chan) ||
+	     cfg80211_offchan_chain_is_active(wiphy_to_rdev(wdev->wiphy),
+					      bss_chandef->chan)))
+		return;
+
+	cfg80211_set_dfs_state(wdev->wiphy, bss_chandef, dfs_state);
+	cfg80211_sta_radar_notify(wdev->wiphy, bss_chandef, event);
+
+	if (csa_active)
+		netdev_info(wdev->netdev, "Set origin channel's DFS state to usable\n");
+	else
+		netdev_info(wdev->netdev, "Set BSS channel's DFS state to %s due to %s\n",
+			    (dfs_state == NL80211_DFS_USABLE) ? "usable" : "available",
+			    associated ? "association" : "disassociation");
+}
+EXPORT_SYMBOL(cfg80211_sta_update_dfs_state);
 
 struct cfg80211_chan_def *wdev_chandef(struct wireless_dev *wdev,
 				       unsigned int link_id)

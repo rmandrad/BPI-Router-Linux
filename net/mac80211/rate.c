@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2002-2005, Instant802 Networks, Inc.
  * Copyright 2005-2006, Devicescape Software, Inc.
@@ -124,11 +123,17 @@ void rate_control_rate_update(struct ieee80211_local *local,
 	struct ieee80211_sta *ista = &sta->sta;
 	void *priv_sta = sta->rate_ctrl_priv;
 	struct ieee80211_chanctx_conf *chanctx_conf;
+	struct ieee80211_link_data *link;
 
 	if (ref && ref->ops->rate_update) {
 		rcu_read_lock();
 
-		chanctx_conf = rcu_dereference(sta->sdata->vif.bss_conf.chanctx_conf);
+		link = rcu_dereference(sta->sdata->link[link->link_id]);
+		if (!link) {
+			rcu_read_unlock();
+			return;
+		}
+		chanctx_conf = rcu_dereference(link->conf->chanctx_conf);
 		if (WARN_ON(!chanctx_conf)) {
 			rcu_read_unlock();
 			return;

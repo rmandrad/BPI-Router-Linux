@@ -2145,6 +2145,8 @@ void ieee80211_link_init(struct ieee80211_sub_if_data *sdata,
 void ieee80211_link_stop(struct ieee80211_link_data *link);
 int ieee80211_vif_set_links(struct ieee80211_sub_if_data *sdata,
 			    u16 new_links, u16 dormant_links);
+void __ieee80211_copy_links_to_vlan(struct ieee80211_sub_if_data *vlan,
+				    struct ieee80211_sub_if_data *ap);
 static inline void ieee80211_vif_clear_links(struct ieee80211_sub_if_data *sdata)
 {
 	ieee80211_vif_set_links(sdata, 0, 0);

@@ -274,16 +274,13 @@ static int ieee80211_change_iface(struct wiphy *wiphy,
 
 	if (type == NL80211_IFTYPE_AP_VLAN && params->use_4addr == 0) {
 		RCU_INIT_POINTER(sdata->u.vlan.sta, NULL);
+		sdata->wdev.valid_links = 0;
 		ieee80211_check_fast_rx_iface(sdata);
 	} else if (type == NL80211_IFTYPE_STATION && params->use_4addr >= 0) {
 		struct ieee80211_if_managed *ifmgd = &sdata->u.mgd;
 
 		if (params->use_4addr == ifmgd->use_4addr)
 			return 0;
-
-		/* FIXME: no support for 4-addr MLO yet */
-		if (ieee80211_vif_is_mld(&sdata->vif))
-			return -EOPNOTSUPP;
 
 		sdata->u.mgd.use_4addr = params->use_4addr;
 		if (!ifmgd->associated)
@@ -1606,6 +1603,7 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 		link_conf->eht_su_beamformer = false;
 		link_conf->eht_su_beamformee = false;
 		link_conf->eht_mu_beamformer = false;
+		link_conf->eht_support = false;
 	}
 
 	if (params->uhr_oper) {
@@ -1656,7 +1654,7 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 	}
 
 	link_conf->dtim_period = params->dtim_period;
-	link_conf->enable_beacon = true;
+	link_conf->enable_beacon = !ieee80211_vif_is_mld(&sdata->vif);
 	link_conf->allow_p2p_go_ps = sdata->vif.p2p;
 	link_conf->twt_responder = params->twt_responder;
 	link_conf->he_obss_pd = params->he_obss_pd;
@@ -1738,6 +1736,12 @@ static int ieee80211_start_ap(struct wiphy *wiphy, struct net_device *dev,
 
 	ieee80211_vif_cfg_change_notify(sdata, BSS_CHANGED_SSID);
 	ieee80211_link_info_change_notify(sdata, link, changed);
+	/* for MLD AP, enable_beacon is false during the first beacon set,
+	 * enable it after that. This allows userspace to control the
+	 * beacon enable timing.
+	 */
+	link_conf->enable_beacon = true;
+
 
 	if (ieee80211_num_beaconing_links(sdata) <= 1)
 		netif_carrier_on(dev);
@@ -1866,11 +1870,11 @@ static int ieee80211_stop_ap(struct wiphy *wiphy, struct net_device *dev,
 
 	ieee80211_free_next_beacon(link);
 
-	/* turn off carrier for this interface and dependent VLANs */
-	list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list)
-		netif_carrier_off(vlan->dev);
-
 	if (ieee80211_num_beaconing_links(sdata) <= 1) {
+		/* turn off carrier for this interface and dependent VLANs */
+		list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list)
+			netif_carrier_off(vlan->dev);
+
 		netif_carrier_off(dev);
 		sdata->u.ap.active = false;
 	}
@@ -2505,11 +2509,14 @@ static int ieee80211_change_station(struct wiphy *wiphy,
 			rcu_assign_pointer(vlansdata->u.vlan.sta, sta);
 			__ieee80211_check_fast_rx_iface(vlansdata);
 			drv_sta_set_4addr(local, sta->sdata, &sta->sta, true);
+			vlansdata->wdev.valid_links = sta->sta.valid_links;
 		}
 
 		if (sta->sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
-		    sta->sdata->u.vlan.sta)
+		    sta->sdata->u.vlan.sta) {
 			RCU_INIT_POINTER(sta->sdata->u.vlan.sta, NULL);
+			sta->sdata->wdev.valid_links = 0;
+		}
 
 		if (test_sta_flag(sta, WLAN_STA_AUTHORIZED))
 			ieee80211_vif_dec_num_mcast(sta->sdata);
@@ -3779,7 +3786,7 @@ static int ieee80211_set_bitrate_mask(struct wiphy *wiphy,
 	}
 
 	if (ieee80211_hw_check(&local->hw, HAS_RATE_CONTROL)) {
-		ret = drv_set_bitrate_mask(local, sdata, mask);
+		ret = drv_set_bitrate_mask(local, sdata, mask, link_id);
 		if (ret)
 			return ret;
 	}
@@ -4666,10 +4673,15 @@ static int ieee80211_probe_client(struct wiphy *wiphy, struct net_device *dev,
 
 	chanctx_conf = rcu_dereference(link_conf->chanctx_conf);
 	if (!chanctx_conf) {
-		ret = -EINVAL;
-		goto unlock;
+		if (!ieee80211_vif_is_mld(&sdata->vif)) {
+			ret = -EINVAL;
+			goto unlock;
+		}
+
+		band = 0;
+	} else {
+		band = chanctx_conf->def.chan->band;
 	}
-	band = chanctx_conf->def.chan->band;
 
 	if (qos) {
 		fc = cpu_to_le16(IEEE80211_FTYPE_DATA |
@@ -5432,9 +5444,6 @@ static int ieee80211_add_intf_link(struct wiphy *wiphy,
 
 	lockdep_assert_wiphy(sdata->local->hw.wiphy);
 
-	if (wdev->use_4addr)
-		return -EOPNOTSUPP;
-
 	return ieee80211_vif_set_links(sdata, wdev->valid_links, 0);
 }
 
@@ -5444,6 +5453,20 @@ static void ieee80211_del_intf_link(struct wiphy *wiphy,
 {
 	struct ieee80211_sub_if_data *sdata = IEEE80211_WDEV_TO_SUB_IF(wdev);
 	u16 new_links = wdev->valid_links & ~BIT(link_id);
+
+	if (wdev->iftype == NL80211_IFTYPE_AP_VLAN) {
+		int i;
+
+		sdata->vif.valid_links = 0;
+		sdata->vif.active_links = 0;
+		sdata->vif.dormant_links = 0;
+		for (i = 0; i < IEEE80211_MLD_MAX_NUM_LINKS; i++) {
+			rcu_assign_pointer(sdata->link[i], NULL);
+			rcu_assign_pointer(sdata->vif.link_conf[i], NULL);
+		}
+
+		return;
+	}
 
 	lockdep_assert_wiphy(sdata->local->hw.wiphy);
 

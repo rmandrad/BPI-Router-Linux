@@ -2945,6 +2945,15 @@ void cfg80211_remove_links(struct wireless_dev *wdev)
 {
 	unsigned int link_id;
 
+	if (wdev->iftype == NL80211_IFTYPE_AP_VLAN) {
+		struct cfg80211_registered_device *rdev = wiphy_to_rdev(wdev->wiphy);
+
+		if (rdev->ops->del_intf_link)
+			rdev->ops->del_intf_link(&rdev->wiphy, wdev, 0);
+
+		return;
+	}
+
 	/*
 	 * links are controlled by upper layers (userspace/cfg)
 	 * only for AP mode, so only remove them here for AP

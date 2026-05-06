@@ -4060,6 +4060,9 @@ static int nl80211_set_wiphy(struct sk_buff *skb, struct genl_info *info)
 		if (frag_threshold < 256)
 			return -EINVAL;
 
+		if (frag_threshold >= 2346)
+			frag_threshold = (u32)-1;
+
 		if (frag_threshold != (u32) -1) {
 			/*
 			 * Fragments (apart from the last one) are required to
@@ -11566,6 +11569,11 @@ skip_beacons:
 	err = nl80211_parse_chandef(rdev, info, &params.chandef);
 	if (err)
 		goto free;
+
+	/* Use RADAR_BACKGROUND attribute here for skipping CAC */
+	if (info->attrs[NL80211_ATTR_RADAR_BACKGROUND]) {
+		cfg80211_set_dfs_state(&rdev->wiphy, &params.chandef, NL80211_DFS_AVAILABLE);
+	}
 
 	if (!cfg80211_reg_can_beacon_relax(&rdev->wiphy, &params.chandef,
 					   wdev->iftype)) {

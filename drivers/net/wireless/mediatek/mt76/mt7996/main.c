@@ -2023,11 +2023,15 @@ static void mt7996_sta_rate_ctrl_update(void *data, struct ieee80211_sta *sta)
 
 static int
 mt7996_set_bitrate_mask(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-			const struct cfg80211_bitrate_mask *mask)
+			const struct cfg80211_bitrate_mask *mask,
+			unsigned int link_id)
 {
 	struct mt7996_dev *dev = mt7996_hw_dev(hw);
 	struct mt7996_vif *mvif = (struct mt7996_vif *)vif->drv_priv;
 	u32 changed = IEEE80211_RC_SUPP_RATES_CHANGED;
+
+	if (vif->valid_links && !(vif->valid_links & BIT(link_id)))
+		return -ENOLINK;
 
 	mvif->deflink.bitrate_mask = *mask;
 

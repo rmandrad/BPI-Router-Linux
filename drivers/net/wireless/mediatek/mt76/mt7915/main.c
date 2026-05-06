@@ -1247,12 +1247,16 @@ static void mt7915_sta_rc_update(struct ieee80211_hw *hw,
 
 static int
 mt7915_set_bitrate_mask(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-			const struct cfg80211_bitrate_mask *mask)
+			const struct cfg80211_bitrate_mask *mask,
+			unsigned int link_id)
 {
 	struct mt7915_vif *mvif = (struct mt7915_vif *)vif->drv_priv;
 	struct mt7915_phy *phy = mt7915_hw_phy(hw);
 	struct mt7915_dev *dev = phy->dev;
 	u32 changed = IEEE80211_RC_SUPP_RATES_CHANGED;
+
+	if (vif->valid_links && !(vif->valid_links & BIT(link_id)))
+		return -ENOLINK;
 
 	mvif->bitrate_mask = *mask;
 

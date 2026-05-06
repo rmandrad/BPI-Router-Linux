@@ -1247,6 +1247,13 @@ ieee80211_tx_prepare(struct ieee80211_sub_if_data *sdata,
 		if (!tx->sta && !is_multicast_ether_addr(hdr->addr1)) {
 			tx->sta = sta_info_get(sdata, hdr->addr1);
 			aggr_check = true;
+
+			if (!tx->sta) {
+				tx->sta = sta_info_get_bss(sdata, hdr->addr1);
+				if (!tx->sta || !tx->sta->sdata->wdev.use_4addr ||
+				    tx->sta->sdata->vif.type != NL80211_IFTYPE_AP_VLAN)
+					tx->sta = NULL;
+			}
 		}
 	}
 
@@ -3849,8 +3856,11 @@ begin:
 	skb = __skb_dequeue(&txqi->frags);
 	if (unlikely(skb)) {
 		if (!(IEEE80211_SKB_CB(skb)->control.flags &
-				IEEE80211_TX_INTCFL_NEED_TXPROCESSING))
+				IEEE80211_TX_INTCFL_NEED_TXPROCESSING)) {
+			// TODO: report airtime of non-first fragments.
+			IEEE80211_SKB_CB(skb)->control.vif = vif;
 			goto out;
+		}
 		IEEE80211_SKB_CB(skb)->control.flags &=
 			~IEEE80211_TX_INTCFL_NEED_TXPROCESSING;
 	} else {
@@ -4357,7 +4367,7 @@ void __ieee80211_subif_start_xmit(struct sk_buff *skb,
 	len = 0;
  out:
 	if (len)
-		ieee80211_tpt_led_trig_tx(local, len);
+		ieee80211_tpt_led_trig_tx(&local->hw, len);
 	rcu_read_unlock();
 }
 
@@ -4689,7 +4699,7 @@ static void ieee80211_8023_xmit(struct ieee80211_sub_if_data *sdata,
 	sta->deflink.tx_stats.packets[queue] += skbs;
 	sta->deflink.tx_stats.bytes[queue] += len;
 
-	ieee80211_tpt_led_trig_tx(local, len);
+	ieee80211_tpt_led_trig_tx(&local->hw, len);
 
 	ieee80211_tx_8023(sdata, skb, sta, false);
 
@@ -6455,9 +6465,10 @@ int ieee80211_tx_control_port(struct wiphy *wiphy, struct net_device *dev,
 		 * for MLO STA, the SA should be the AP MLD address, but
 		 * the link ID has been selected already
 		 */
-		if (sta && sta->sta.mlo)
+		if (sta && sta->sta.mlo && link_id == IEEE80211_LINK_UNSPECIFIED)
 			memcpy(ehdr->h_source, sdata->vif.addr, ETH_ALEN);
 	}
+
 	rcu_read_unlock();
 
 start_xmit:

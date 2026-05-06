@@ -594,6 +594,16 @@ static void ieee80211_chan_bw_change(struct ieee80211_local *local,
 			else
 				new_chandef = &link_conf->chanreq.oper;
 
+			/* Access the reserved chanreq of the AP when it is AP VLAN */
+			if (reserved && sdata->vif.type == NL80211_IFTYPE_AP_VLAN) {
+				struct ieee80211_sub_if_data *ap;
+				struct ieee80211_link_data *ap_link;
+
+				ap = container_of(sdata->bss, struct ieee80211_sub_if_data, u.ap);
+				ap_link = rcu_dereference(ap->link[link_id]);
+				new_chandef = &ap_link->reserved.oper;
+			}
+
 			new_sta_bw = _ieee80211_sta_cur_vht_bw(link_sta,
 							       new_chandef);
 
@@ -1186,7 +1196,8 @@ __ieee80211_link_copy_chanctx_to_vlans(struct ieee80211_link_data *link,
 	struct ieee80211_sub_if_data *vlan;
 	struct ieee80211_chanctx_conf *conf;
 
-	if (WARN_ON(sdata->vif.type != NL80211_IFTYPE_AP))
+	if (WARN_ON(sdata->vif.type != NL80211_IFTYPE_AP) ||
+	    ieee80211_vif_is_mld(&sdata->vif))
 		return;
 
 	lockdep_assert_wiphy(local->hw.wiphy);
@@ -1443,7 +1454,7 @@ ieee80211_link_update_chanreq(struct ieee80211_link_data *link,
 
 	link->conf->chanreq = *chanreq;
 
-	if (sdata->vif.type != NL80211_IFTYPE_AP)
+	if (sdata->vif.type != NL80211_IFTYPE_AP || ieee80211_vif_is_mld(&sdata->vif))
 		return;
 
 	list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list) {
@@ -2270,6 +2281,9 @@ void ieee80211_link_vlan_copy_chanctx(struct ieee80211_link_data *link)
 		return;
 
 	ap = container_of(sdata->bss, struct ieee80211_sub_if_data, u.ap);
+
+	if (ieee80211_vif_is_mld(&ap->vif))
+		return;
 
 	ap_conf = wiphy_dereference(local->hw.wiphy,
 				    ap->vif.link_conf[link_id]);

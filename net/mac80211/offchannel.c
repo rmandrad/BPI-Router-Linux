@@ -948,43 +948,60 @@ int ieee80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 		need_offchan = false;
 	} else if (sdata->vif.type == NL80211_IFTYPE_NAN) {
 		/* Frames can be sent during NAN schedule */
-	} else if (!need_offchan) {
+	} else if (!need_offchan &&
+		   !(ieee80211_vif_is_mld(&sdata->vif) &&
+		     is_multicast_ether_addr(mgmt->da))) {
 		struct ieee80211_chanctx_conf *chanctx_conf = NULL;
-		int i;
+		struct ieee80211_bss_conf *conf;
+		unsigned int link;
 
 		rcu_read_lock();
-		/* Check all the links first */
-		for (i = 0; i < ARRAY_SIZE(sdata->vif.link_conf); i++) {
-			struct ieee80211_bss_conf *conf;
+		if (ieee80211_vif_is_mld(&sdata->vif) && mlo_sta &&
+		    ether_addr_equal(sdata->vif.addr, mgmt->sa)) {
+			unsigned long links = sdata->vif.active_links;
 
-			conf = rcu_dereference(sdata->vif.link_conf[i]);
-			if (!conf)
-				continue;
+			for_each_set_bit(link, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
+				conf = rcu_dereference(sdata->vif.link_conf[link]);
+				if (!conf)
+					continue;
 
-			chanctx_conf = rcu_dereference(conf->chanctx_conf);
-			if (!chanctx_conf)
-				continue;
+				chanctx_conf = rcu_dereference(conf->chanctx_conf);
+				if (!chanctx_conf)
+					continue;
 
-			if (mlo_sta && params->chan == chanctx_conf->def.chan &&
-			    ether_addr_equal(sdata->vif.addr, mgmt->sa)) {
-				link_id = i;
-				break;
+				if (params->chan == chanctx_conf->def.chan) {
+					link_id = link;
+					break;
+				}
+
+				chanctx_conf = NULL;
 			}
+		} else {
+			for (link = 0; link < ARRAY_SIZE(sdata->vif.link_conf); link++) {
+				conf = rcu_dereference(sdata->vif.link_conf[link]);
+				if (!conf)
+					continue;
 
-			if (ether_addr_equal(conf->addr, mgmt->sa)) {
-				/* If userspace requested Tx on a specific link
-				 * use the same link id if the link bss is matching
-				 * the requested chan.
-				 */
-				if (sdata->vif.valid_links &&
-				    params->link_id >= 0 && params->link_id == i &&
-				    params->chan == chanctx_conf->def.chan)
-					link_id = i;
+				chanctx_conf = rcu_dereference(conf->chanctx_conf);
+				if (!chanctx_conf)
+					continue;
 
-				break;
+				if (ether_addr_equal(conf->addr, mgmt->sa)) {
+					/* If userspace requested Tx on a specific link
+					 * use the same link id if the link bss is matching
+					 * the requested chan.
+					 */
+					if (sdata->vif.valid_links &&
+					    params->link_id >= 0 &&
+					    params->link_id == link &&
+					    params->chan == chanctx_conf->def.chan)
+						link_id = link;
+
+					break;
+				}
+
+				chanctx_conf = NULL;
 			}
-
-			chanctx_conf = NULL;
 		}
 
 		if (chanctx_conf) {
@@ -1061,7 +1078,35 @@ int ieee80211_mgmt_tx(struct wiphy *wiphy, struct wireless_dev *wdev,
 	}
 
 	if (!need_offchan) {
-		ieee80211_tx_skb_tid(sdata, skb, 7, link_id);
+		unsigned long links = sdata->vif.active_links;
+		if (is_multicast_ether_addr(mgmt->da) && hweight16(links) > 1) {
+			unsigned int link;
+			struct sk_buff *dskb;
+			struct ieee80211_hdr *hdr;
+			struct ieee80211_bss_conf *conf;
+
+			for_each_set_bit(link, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
+				conf = rcu_dereference(sdata->vif.link_conf[link]);
+				if (!conf)
+					continue;
+
+				dskb = skb_clone(skb, GFP_ATOMIC);
+				if (!dskb) {
+					ret = -ENOMEM;
+					kfree_skb(skb);
+					goto out_unlock;
+				}
+
+				/* Assign link address */
+				hdr = (void *)dskb->data;
+				memcpy(hdr->addr2, conf->addr, ETH_ALEN);
+				memcpy(hdr->addr3, conf->addr, ETH_ALEN);
+				ieee80211_tx_skb_tid(sdata, dskb, 7, link);
+			}
+			kfree_skb(skb);
+		} else {
+			ieee80211_tx_skb_tid(sdata, skb, 7, link_id);
+		}
 		ret = 0;
 		goto out_unlock;
 	}

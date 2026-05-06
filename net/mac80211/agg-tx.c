@@ -16,9 +16,15 @@
 #include <linux/slab.h>
 #include <linux/export.h>
 #include <net/mac80211.h>
+#include <linux/moduleparam.h>
 #include "ieee80211_i.h"
 #include "driver-ops.h"
 #include "wme.h"
+
+static int addba_resp_wait_count = 2;
+module_param(addba_resp_wait_count, int, 0644);
+MODULE_PARM_DESC(addba_resp_wait_count,
+		 "Number of ADDBA_RESP_INTERVAL to wait for addba response");
 
 /**
  * DOC: TX A-MPDU aggregation
@@ -66,7 +72,8 @@ static void ieee80211_send_addba_request(struct sta_info *sta, u16 tid,
 	struct ieee80211_local *local = sdata->local;
 	struct sk_buff *skb;
 	struct ieee80211_mgmt *mgmt;
-	u16 capab;
+	u16 capab = 0;
+	bool amsdu = ieee80211_hw_check(&local->hw, SUPPORTS_AMSDU_IN_AMPDU);
 
 	skb = dev_alloc_skb(sizeof(*mgmt) +
 			    2 + sizeof(struct ieee80211_addba_ext_ie) +
@@ -83,7 +90,8 @@ static void ieee80211_send_addba_request(struct sta_info *sta, u16 tid,
 	mgmt->u.action.u.addba_req.action_code = WLAN_ACTION_ADDBA_REQ;
 
 	mgmt->u.action.u.addba_req.dialog_token = dialog_token;
-	capab = IEEE80211_ADDBA_PARAM_AMSDU_MASK;
+	if (amsdu)
+		capab = IEEE80211_ADDBA_PARAM_AMSDU_MASK;
 	capab |= IEEE80211_ADDBA_PARAM_POLICY_MASK;
 	capab |= u16_encode_bits(tid, IEEE80211_ADDBA_PARAM_TID_MASK);
 	capab |= u16_encode_bits(agg_size, IEEE80211_ADDBA_PARAM_BUF_SIZE_MASK);
@@ -456,7 +464,7 @@ static void ieee80211_send_addba_with_timeout(struct sta_info *sta,
 	lockdep_assert_wiphy(sta->local->hw.wiphy);
 
 	/* activate the timer for the recipient's addBA response */
-	mod_timer(&tid_tx->addba_resp_timer, jiffies + ADDBA_RESP_INTERVAL);
+	mod_timer(&tid_tx->addba_resp_timer, jiffies + addba_resp_wait_count * ADDBA_RESP_INTERVAL);
 	ht_dbg(sdata, "activated addBA response timer on %pM tid %d\n",
 	       sta->sta.addr, tid);
 
@@ -607,6 +615,12 @@ int ieee80211_start_tx_ba_session(struct ieee80211_sta *pubsta, u16 tid,
 	int ret = 0;
 
 	trace_api_start_tx_ba_session(pubsta, tid);
+
+	if (ieee80211_is_ba_disable(&local->hw)) {
+		ht_dbg(sdata,
+		       "BA session is forced to be shut down due to debugfs config\n");
+		return -EINVAL;
+	}
 
 	if (WARN(sta->reserved_tid == tid,
 		 "Requested to start BA session on reserved tid=%d", tid))
@@ -1039,7 +1053,8 @@ void ieee80211_process_addba_resp(struct ieee80211_local *local,
 
 		tid_tx->buf_size = buf_size;
 		tid_tx->amsdu = amsdu;
-
+		ieee80211_send_bar(&sta->sdata->vif, sta->sta.addr,
+					   tid, 0);
 		if (test_bit(HT_AGG_STATE_DRV_READY, &tid_tx->state))
 			ieee80211_agg_tx_operational(local, sta, tid);
 
@@ -1048,10 +1063,14 @@ void ieee80211_process_addba_resp(struct ieee80211_local *local,
 		tid_tx->timeout =
 			le16_to_cpu(mgmt->u.action.u.addba_resp.timeout);
 
-		if (tid_tx->timeout) {
-			mod_timer(&tid_tx->session_timer,
-				  TU_TO_EXP_TIME(tid_tx->timeout));
-			tid_tx->last_tx = jiffies;
+			/*
+			 * In certification mode, avoid frequent DelBA from the
+			 * session timer since some testbed STAs cannot handle it.
+			 */
+			if (tid_tx->timeout && !ieee80211_is_cert_mode(&local->hw)) {
+				mod_timer(&tid_tx->session_timer,
+					  TU_TO_EXP_TIME(tid_tx->timeout));
+				tid_tx->last_tx = jiffies;
 		}
 
 	} else {

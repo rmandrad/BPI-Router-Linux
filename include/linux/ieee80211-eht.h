@@ -287,11 +287,6 @@ ieee80211_eht_mcs_nss_size(const struct ieee80211_he_cap_elem *he_cap,
 {
 	u8 count = 0;
 
-	/* on 2.4 GHz, if it supports 40 MHz, the result is 3 */
-	if (he_cap->phy_cap_info[0] &
-	    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G)
-		return 3;
-
 	/* on 2.4 GHz, these three bits are reserved, so should be 0 */
 	if (he_cap->phy_cap_info[0] &
 	    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G)
@@ -306,6 +301,11 @@ ieee80211_eht_mcs_nss_size(const struct ieee80211_he_cap_elem *he_cap,
 
 	if (count)
 		return count;
+
+	/* on 2.4 GHz, if it supports 40 MHz, the result is 3 */
+	if (he_cap->phy_cap_info[0] &
+	    IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G)
+		return 3;
 
 	return from_ap ? 3 : 4;
 }

@@ -637,9 +637,6 @@ u32 ieee80211_can_leave_ch(struct ieee80211_sub_if_data *sdata,
 	if (!ieee80211_is_radar_required(local, radio_mask, req))
 		return true;
 
-	if (!regulatory_pre_cac_allowed(local->hw.wiphy))
-		return false;
-
 	list_for_each_entry(sdata_iter, &local->interfaces, list) {
 		for_each_valid_link(&sdata_iter->wdev, link_id) {
 			if (!sdata_iter->wdev.links[link_id].cac_started)

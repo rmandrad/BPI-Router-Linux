@@ -398,13 +398,6 @@ static int ieee80211_check_concurrent_iface(struct ieee80211_sub_if_data *sdata,
 							nsdata->vif.type))
 				return -ENOTUNIQ;
 
-			/* No support for VLAN with MLO yet */
-			if (iftype == NL80211_IFTYPE_AP_VLAN &&
-			    sdata->wdev.use_4addr &&
-			    nsdata->vif.type == NL80211_IFTYPE_AP &&
-			    nsdata->vif.valid_links)
-				return -EOPNOTSUPP;
-
 			/*
 			 * can only add VLANs to enabled APs
 			 */
@@ -984,7 +977,10 @@ static int ieee80211_netdev_fill_forward_path(struct net_device_path_ctx *ctx,
 			}
 		}
 
-		sta = sta_info_get(sdata, sdata->deflink.u.mgd.bssid);
+		if (ieee80211_vif_is_mld(&sdata->vif))
+			sta = sta_info_get(sdata, sdata->vif.cfg.ap_addr);
+		else
+			sta = sta_info_get(sdata, sdata->deflink.u.mgd.bssid);
 		break;
 	default:
 		goto out;
@@ -1351,6 +1347,9 @@ int ieee80211_do_open(struct wireless_dev *wdev, bool coming_up)
 		memcpy(sdata->vif.hw_queue, master->vif.hw_queue,
 		       sizeof(sdata->vif.hw_queue));
 		sdata->vif.bss_conf.chanreq = master->vif.bss_conf.chanreq;
+
+		if (ieee80211_vif_is_mld(&master->vif))
+			__ieee80211_copy_links_to_vlan(sdata, master);
 
 		sdata->crypto_tx_tailroom_needed_cnt +=
 			master->crypto_tx_tailroom_needed_cnt;

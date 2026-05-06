@@ -3487,9 +3487,13 @@ ieee80211_rx_check_bss_color_collision(struct ieee80211_rx_data *rx)
 
 		color = le32_get_bits(he_oper->he_oper_params,
 				      IEEE80211_HE_OPERATION_BSS_COLOR_MASK);
+
+		bss_conf->used_color_bitmap |= BIT_ULL(color);
+
+		// trace_bss_color_bitmap(color, bss_conf->used_color_bitmap);
 		if (color == bss_conf->he_bss_color.color)
 			ieee80211_obss_color_collision_notify(&rx->sdata->vif,
-							      BIT_ULL(color),
+							      bss_conf->used_color_bitmap,
 							      bss_conf->link_id);
 	}
 }
@@ -3554,6 +3558,9 @@ ieee80211_process_rx_twt_action(struct ieee80211_rx_data *rx)
 
 	/* TWT actions are only supported in AP for the moment */
 	if (sdata->vif.type != NL80211_IFTYPE_AP)
+		return false;
+
+	if (!sdata->vif.bss_conf.twt_responder)
 		return false;
 
 	if (!rx->local->ops->add_twt_setup)
@@ -3640,6 +3647,11 @@ ieee80211_rx_h_action(struct ieee80211_rx_data *rx)
 			struct ieee80211_supported_band *sband;
 			enum ieee80211_smps_mode smps_mode;
 			struct sta_opmode_info sta_opmode = {};
+
+			if (rx->link_sta->pub->he_cap.has_he &&
+			    !(rx->link_sta->pub->he_cap.he_cap_elem.mac_cap_info[5] &
+			      IEEE80211_HE_MAC_CAP5_HE_DYNAMIC_SM_PS))
+				goto invalid;
 
 			if (sdata->vif.type != NL80211_IFTYPE_AP &&
 			    sdata->vif.type != NL80211_IFTYPE_AP_VLAN)
@@ -5580,7 +5592,7 @@ void ieee80211_rx_list(struct ieee80211_hw *hw, struct ieee80211_sta *pubsta,
 	if (skb) {
 		if ((status->flag & RX_FLAG_8023) ||
 			ieee80211_is_data_present(hdr->frame_control))
-			ieee80211_tpt_led_trig_rx(local, skb->len);
+			ieee80211_tpt_led_trig_rx(&local->hw, skb->len);
 
 		if (status->flag & RX_FLAG_8023)
 			__ieee80211_rx_handle_8023(hw, pubsta, skb, list);

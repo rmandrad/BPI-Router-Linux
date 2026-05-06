@@ -299,7 +299,8 @@ int ath12k_mac_op_set_frag_threshold(struct ieee80211_hw *hw,
 int
 ath12k_mac_op_set_bitrate_mask(struct ieee80211_hw *hw,
 			       struct ieee80211_vif *vif,
-			       const struct cfg80211_bitrate_mask *mask);
+			       const struct cfg80211_bitrate_mask *mask,
+			       unsigned int link_id);
 int ath12k_mac_op_get_survey(struct ieee80211_hw *hw, int idx,
 			     struct survey_info *survey);
 void ath12k_mac_op_flush(struct ieee80211_hw *hw, struct ieee80211_vif *vif,

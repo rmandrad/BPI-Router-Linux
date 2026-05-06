@@ -76,6 +76,7 @@ validate_chandef_by_ht_vht_oper(struct ieee80211_sub_if_data *sdata,
 				struct cfg80211_chan_def *chandef)
 {
 	u32 control_freq, center_freq1, center_freq2;
+	u16 punct_bitmap;
 	enum nl80211_chan_width chan_width;
 	struct ieee80211_ht_operation ht_oper;
 	struct ieee80211_vht_operation vht_oper;
@@ -90,6 +91,7 @@ validate_chandef_by_ht_vht_oper(struct ieee80211_sub_if_data *sdata,
 	center_freq1 = chandef->center_freq1;
 	center_freq2 = chandef->center_freq2;
 	chan_width = chandef->width;
+	punct_bitmap = chandef->punctured;
 
 	ht_oper.primary_chan = ieee80211_frequency_to_channel(control_freq);
 	if (control_freq != center_freq1)
@@ -100,6 +102,8 @@ validate_chandef_by_ht_vht_oper(struct ieee80211_sub_if_data *sdata,
 		ht_oper.ht_param = IEEE80211_HT_PARAM_CHA_SEC_NONE;
 
 	ieee80211_chandef_ht_oper(&ht_oper, chandef);
+
+	chandef->punctured = punct_bitmap;
 
 	if (conn->mode < IEEE80211_CONN_MODE_VHT)
 		return;

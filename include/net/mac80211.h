@@ -823,6 +823,7 @@ struct ieee80211_bss_conf {
 	} he_oper;
 	struct ieee80211_he_obss_pd he_obss_pd;
 	struct cfg80211_he_bss_color he_bss_color;
+	u64 used_color_bitmap;
 	struct ieee80211_fils_discovery fils_discovery;
 	u32 unsol_bcast_probe_resp_interval;
 	struct cfg80211_bitrate_mask beacon_tx_rate;
@@ -3141,7 +3142,19 @@ struct ieee80211_hw {
 	u32 max_mtu;
 	const s8 *tx_power_levels;
 	u8 max_txpwr_levels_idx;
+	bool cert_mode;
+	bool ba_disable;
 };
+
+static inline bool ieee80211_is_cert_mode(struct ieee80211_hw *hw)
+{
+	return hw->cert_mode;
+}
+
+static inline bool ieee80211_is_ba_disable(struct ieee80211_hw *hw)
+{
+	return hw->ba_disable;
+}
 
 static inline bool _ieee80211_hw_check(struct ieee80211_hw *hw,
 				       enum ieee80211_hw_flags flg)
@@ -3156,6 +3169,13 @@ static inline void _ieee80211_hw_set(struct ieee80211_hw *hw,
 	return __set_bit(flg, hw->flags);
 }
 #define ieee80211_hw_set(hw, flg)	_ieee80211_hw_set(hw, IEEE80211_HW_##flg)
+
+static inline void _ieee80211_hw_clear(struct ieee80211_hw *hw,
+				     enum ieee80211_hw_flags flg)
+{
+	return __clear_bit(flg, hw->flags);
+}
+#define ieee80211_hw_clear(hw, flg)	_ieee80211_hw_clear(hw, IEEE80211_HW_##flg)
 
 /**
  * struct ieee80211_scan_request - hw scan request
@@ -3842,6 +3862,8 @@ enum ieee80211_rate_control_changed {
 	IEEE80211_RC_SMPS_CHANGED	= BIT(1),
 	IEEE80211_RC_SUPP_RATES_CHANGED	= BIT(2),
 	IEEE80211_RC_NSS_CHANGED	= BIT(3),
+	/* Defined for mtk vendor command */
+	IEEE80211_RC_CODING_TYPE_CHANGED= BIT(7),
 };
 
 /**
@@ -4773,7 +4795,8 @@ struct ieee80211_ops {
 			      u32 *tx, u32 *tx_max, u32 *rx, u32 *rx_max);
 	bool (*tx_frames_pending)(struct ieee80211_hw *hw);
 	int (*set_bitrate_mask)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-				const struct cfg80211_bitrate_mask *mask);
+				const struct cfg80211_bitrate_mask *mask,
+				unsigned int link_id);
 	void (*event_callback)(struct ieee80211_hw *hw,
 			       struct ieee80211_vif *vif,
 			       const struct ieee80211_event *event);
@@ -5047,6 +5070,8 @@ __ieee80211_create_tpt_led_trigger(struct ieee80211_hw *hw,
 				   unsigned int flags,
 				   const struct ieee80211_tpt_blink *blink_table,
 				   unsigned int blink_table_len);
+void __ieee80211_tpt_led_trig_tx(struct ieee80211_hw *hw, int bytes);
+void __ieee80211_tpt_led_trig_rx(struct ieee80211_hw *hw, int bytes);
 #endif
 /**
  * ieee80211_get_tx_led_name - get name of TX LED
@@ -5154,6 +5179,22 @@ ieee80211_create_tpt_led_trigger(struct ieee80211_hw *hw, unsigned int flags,
 						  blink_table_len);
 #else
 	return NULL;
+#endif
+}
+
+static inline void
+ieee80211_tpt_led_trig_tx(struct ieee80211_hw *hw, int bytes)
+{
+#ifdef CONFIG_MAC80211_LEDS
+	__ieee80211_tpt_led_trig_tx(hw, bytes);
+#endif
+}
+
+static inline void
+ieee80211_tpt_led_trig_rx(struct ieee80211_hw *hw, int bytes)
+{
+#ifdef CONFIG_MAC80211_LEDS
+	__ieee80211_tpt_led_trig_rx(hw, bytes);
 #endif
 }
 
@@ -7959,6 +8000,13 @@ int ieee80211_emulate_switch_vif_chanctx(struct ieee80211_hw *hw,
 					 struct ieee80211_vif_chanctx_switch *vifs,
 					 int n_vifs,
 					 enum ieee80211_chanctx_switch_mode mode);
+
+/**
+ * ieee80211_get_scanning - get the mac80211 scanning bitmask
+ *
+ * @hw: pointer as obtained from ieee80211_alloc_hw()
+ */
+unsigned long ieee80211_get_scanning(struct ieee80211_hw *hw);
 
 /**
  * ieee80211_vif_nan_started - Return whether a NAN vif is started

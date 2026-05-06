@@ -13029,7 +13029,8 @@ exit:
 int
 ath12k_mac_op_set_bitrate_mask(struct ieee80211_hw *hw,
 			       struct ieee80211_vif *vif,
-			       const struct cfg80211_bitrate_mask *mask)
+			       const struct cfg80211_bitrate_mask *mask,
+			       unsigned int link_id)
 {
 	struct ath12k_vif *ahvif = ath12k_vif_to_ahvif(vif);
 	struct ath12k_link_vif *arvif;
@@ -13055,7 +13056,16 @@ ath12k_mac_op_set_bitrate_mask(struct ieee80211_hw *hw,
 
 	lockdep_assert_wiphy(hw->wiphy);
 
-	arvif = &ahvif->deflink;
+	if (vif->valid_links) {
+		if (!(vif->valid_links & BIT(link_id)))
+			return -ENOLINK;
+
+		arvif = wiphy_dereference(hw->wiphy, ahvif->link[link_id]);
+		if (!arvif)
+			return -ENOLINK;
+	} else {
+		arvif = &ahvif->deflink;
+	}
 
 	ar = arvif->ar;
 	if (ath12k_mac_vif_link_chan(vif, arvif->link_id, &def)) {

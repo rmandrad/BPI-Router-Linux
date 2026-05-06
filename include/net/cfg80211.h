@@ -163,6 +163,7 @@ enum ieee80211_channel_flags {
 	(IEEE80211_CHAN_NO_HT40PLUS | IEEE80211_CHAN_NO_HT40MINUS)
 
 #define IEEE80211_DFS_MIN_CAC_TIME_MS		60000
+#define IEEE80211_DFS_WEATHER_MIN_CAC_TIME_MS	600000
 #define IEEE80211_DFS_MIN_NOP_TIME_MS		(30 * 60 * 1000)
 
 /**
@@ -9334,6 +9335,20 @@ void cfg80211_cac_event(struct net_device *netdev,
 			const struct cfg80211_chan_def *chandef,
 			enum nl80211_radar_event event, gfp_t gfp,
 			unsigned int link_id);
+
+/**
+ * cfg80211_sta_update_dfs_state - Update channel's DFS state during STA channel switch,
+ *				   association, and disassociation
+ * @wdev: the wireless device
+ * @bss_chandef: the current BSS channel definition
+ * @csa_chandef: the CSA channel definition
+ * @associated: whether STA is during association or disassociation process
+ *
+ */
+void cfg80211_sta_update_dfs_state(struct wireless_dev *wdev,
+				   const struct cfg80211_chan_def *bss_chandef,
+				   const struct cfg80211_chan_def *csa_chandef,
+				   bool associated);
 
 /**
  * cfg80211_background_cac_abort - Channel Availability Check offchan abort event

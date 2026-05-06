@@ -68,7 +68,7 @@ MODULE_PARM_DESC(max_probe_tries,
  * probe on beacon miss before declaring the connection lost
  * default to what we want.
  */
-static int beacon_loss_count = 7;
+static int beacon_loss_count = 20;
 module_param(beacon_loss_count, int, 0644);
 MODULE_PARM_DESC(beacon_loss_count,
 		 "Number of beacon intervals before we decide beacon was lost.");
@@ -2496,10 +2496,16 @@ void ieee80211_send_4addr_nullfunc(struct ieee80211_local *local,
 	fc = cpu_to_le16(IEEE80211_FTYPE_DATA | IEEE80211_STYPE_NULLFUNC |
 			 IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS);
 	nullfunc->frame_control = fc;
-	memcpy(nullfunc->addr1, sdata->deflink.u.mgd.bssid, ETH_ALEN);
 	memcpy(nullfunc->addr2, sdata->vif.addr, ETH_ALEN);
-	memcpy(nullfunc->addr3, sdata->deflink.u.mgd.bssid, ETH_ALEN);
 	memcpy(nullfunc->addr4, sdata->vif.addr, ETH_ALEN);
+
+	if (ieee80211_vif_is_mld(&sdata->vif)) {
+		memcpy(nullfunc->addr1, sdata->vif.cfg.ap_addr, ETH_ALEN);
+		memcpy(nullfunc->addr3, sdata->vif.cfg.ap_addr, ETH_ALEN);
+	} else {
+		memcpy(nullfunc->addr1, sdata->deflink.u.mgd.bssid, ETH_ALEN);
+		memcpy(nullfunc->addr3, sdata->deflink.u.mgd.bssid, ETH_ALEN);
+	}
 
 	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_INTFL_DONT_ENCRYPT;
 	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_CTL_USE_MINRATE;
@@ -3076,6 +3082,11 @@ ieee80211_sta_process_chanswitch(struct ieee80211_link_data *link,
 
 	if (csa_ie.mode)
 		ieee80211_vif_block_queues_csa(sdata);
+
+	cfg80211_sta_update_dfs_state(&sdata->wdev,
+				      &link->conf->chanreq.oper,
+				      &link->csa.chanreq.oper,
+				      sdata->vif.cfg.assoc);
 
 	cfg80211_ch_switch_started_notify(sdata->dev, &csa_ie.chanreq.oper,
 					  link->link_id, csa_ie.count,
@@ -4317,6 +4328,10 @@ static void ieee80211_set_disassoc(struct ieee80211_sub_if_data *sdata,
 		link = sdata_dereference(sdata->link[link_id], sdata);
 		if (!link)
 			continue;
+
+		cfg80211_sta_update_dfs_state(&sdata->wdev,
+					      &link->conf->chanreq.oper,
+					      NULL, sdata->vif.cfg.assoc);
 		ieee80211_link_release_channel(link);
 	}
 
@@ -5510,7 +5525,8 @@ static bool ieee80211_assoc_config_link(struct ieee80211_link_data *link,
 	sband = local->hw.wiphy->bands[link->conf->chanreq.oper.chan->band];
 
 	/* Set up internal HT/VHT capabilities */
-	if (elems->ht_cap_elem && link->u.mgd.conn.mode >= IEEE80211_CONN_MODE_HT)
+	if (elems->ht_cap_elem && link->u.mgd.conn.mode >= IEEE80211_CONN_MODE_HT &&
+	    !is_6ghz)
 		ieee80211_ht_cap_ie_to_sta_ht_cap(sdata, sband,
 						  elems->ht_cap_elem,
 						  link_sta);
@@ -6147,6 +6163,26 @@ ieee80211_determine_our_sta_mode_assoc(struct ieee80211_sub_if_data *sdata,
 			       conn->bw_limit, tmp.bw_limit);
 }
 
+static bool ieee80211_check_same_ctrl_channel(struct ieee80211_sub_if_data *sdata,
+					      const struct cfg80211_chan_def *chandef)
+{
+	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_chanctx *ctx;
+
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	list_for_each_entry(ctx, &local->chanctx_list, list) {
+		if (ctx->replace_state == IEEE80211_CHANCTX_WILL_BE_REPLACED)
+			continue;
+		if (ctx->mode == IEEE80211_CHANCTX_EXCLUSIVE)
+			continue;
+		if (chandef->chan == ctx->conf.def.chan)
+			return true;
+	}
+
+	return false;
+}
+
 static int ieee80211_prep_channel(struct ieee80211_sub_if_data *sdata,
 				  struct ieee80211_link_data *link,
 				  int link_id,
@@ -6225,6 +6261,9 @@ static int ieee80211_prep_channel(struct ieee80211_sub_if_data *sdata,
 	if (chanreq.oper.width == NL80211_CHAN_WIDTH_5 ||
 	    chanreq.oper.width == NL80211_CHAN_WIDTH_10 ||
 	    cfg80211_chandef_is_s1g(&chanreq.oper))
+		return ret;
+
+	if (!ret || !ieee80211_check_same_ctrl_channel(sdata, &chanreq.oper))
 		return ret;
 
 	while (ret && chanreq.oper.width != NL80211_CHAN_WIDTH_20_NOHT) {
@@ -6769,6 +6808,11 @@ static void ieee80211_rx_mgmt_assoc_resp(struct ieee80211_sub_if_data *sdata,
 		for (ac = 0; ac < IEEE80211_NUM_ACS; ac++)
 			if (link->tx_conf[ac].uapsd)
 				resp.uapsd_queues |= ieee80211_ac_to_qos_mask[ac];
+
+		if (status_code == WLAN_STATUS_SUCCESS)
+			cfg80211_sta_update_dfs_state(&sdata->wdev,
+						      &link->conf->chanreq.oper,
+						      NULL, sdata->vif.cfg.assoc);
 	}
 
 	if (ieee80211_vif_is_mld(&sdata->vif)) {
@@ -8283,6 +8327,15 @@ void ieee80211_sta_rx_queued_mgmt(struct ieee80211_sub_if_data *sdata,
 			return;
 	}
 
+	/* Do MLD address translation for Multicast/Broadcast frame. */
+	if (is_multicast_ether_addr(mgmt->da) && !ieee80211_is_probe_resp(fc) &&
+	    !ieee80211_is_beacon(fc)) {
+		if (ether_addr_equal(mgmt->sa, link->conf->bssid))
+			ether_addr_copy(mgmt->sa, sdata->vif.cfg.ap_addr);
+		if (ether_addr_equal(mgmt->bssid, link->conf->bssid))
+			ether_addr_copy(mgmt->bssid, sdata->vif.cfg.ap_addr);
+	}
+
 	switch (fc & IEEE80211_FCTL_STYPE) {
 	case IEEE80211_STYPE_BEACON:
 		ieee80211_rx_mgmt_beacon(link, (void *)mgmt,
@@ -8589,7 +8642,7 @@ void ieee80211_sta_work(struct ieee80211_sub_if_data *sdata)
 			 */
 			if (status_acked) {
 				ifmgd->assoc_data->timeout =
-					jiffies + IEEE80211_ASSOC_TIMEOUT_SHORT;
+					jiffies + IEEE80211_ASSOC_TIMEOUT_SHORT * 4;
 				run_again(sdata, ifmgd->assoc_data->timeout);
 			} else {
 				ifmgd->assoc_data->timeout = jiffies - 1;
@@ -9017,14 +9070,16 @@ void ieee80211_mgd_setup_link(struct ieee80211_link_data *link)
 
 	ieee80211_clear_tpe(&link->conf->tpe);
 
-	if (sdata->u.mgd.assoc_data)
+	if (sdata->u.mgd.assoc_data) {
 		ether_addr_copy(link->conf->addr,
 				sdata->u.mgd.assoc_data->link[link_id].addr);
-	else if (sdata->u.mgd.reconf.add_links_data)
+	} else if (sdata->u.mgd.reconf.add_links_data) {
 		ether_addr_copy(link->conf->addr,
 				sdata->u.mgd.reconf.add_links_data->link[link_id].addr);
-	else if (!is_valid_ether_addr(link->conf->addr))
-		eth_random_addr(link->conf->addr);
+	} else if (!is_valid_ether_addr(link->conf->addr)) {
+		ether_addr_copy(link->conf->addr, sdata->vif.addr);
+		link->conf->addr[4] += link_id + 1;
+	}
 }
 
 /* scan finished notification */
@@ -9767,10 +9822,6 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 	for (i = 0; i < IEEE80211_MLD_MAX_NUM_LINKS; i++)
 		size += req->links[i].elems_len;
 
-	/* FIXME: no support for 4-addr MLO yet */
-	if (sdata->u.mgd.use_4addr && req->link_id >= 0)
-		return -EOPNOTSUPP;
-
 	assoc_data = kzalloc(size, GFP_KERNEL);
 	if (!assoc_data)
 		return -ENOMEM;
@@ -9886,11 +9937,14 @@ int ieee80211_mgd_assoc(struct ieee80211_sub_if_data *sdata,
 			}
 
 			link = sdata_dereference(sdata->link[i], sdata);
-			if (link)
-				ether_addr_copy(assoc_data->link[i].addr,
-						link->conf->addr);
-			else
-				eth_random_addr(assoc_data->link[i].addr);
+				if (link) {
+					ether_addr_copy(assoc_data->link[i].addr,
+							link->conf->addr);
+				} else {
+					ether_addr_copy(assoc_data->link[i].addr,
+							sdata->vif.addr);
+					assoc_data->link[i].addr[4] += i + 1;
+				}
 			sband = local->hw.wiphy->bands[link_cbss->channel->band];
 
 			if (match_auth && i == assoc_link_id && link)

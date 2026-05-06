@@ -1343,8 +1343,10 @@ static int __must_check __sta_info_destroy_part1(struct sta_info *sta)
 		drv_sta_pre_rcu_remove(local, sta->sdata, sta);
 
 	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
-	    rcu_access_pointer(sdata->u.vlan.sta) == sta)
+	    rcu_access_pointer(sdata->u.vlan.sta) == sta) {
 		RCU_INIT_POINTER(sdata->u.vlan.sta, NULL);
+		sdata->wdev.valid_links = 0;
+	}
 
 	return 0;
 }
@@ -3442,6 +3444,9 @@ void ieee80211_sta_remove_link(struct sta_info *sta, unsigned int link_id)
 	lockdep_assert_wiphy(sdata->local->hw.wiphy);
 
 	sta->sta.valid_links &= ~BIT(link_id);
+
+	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN && sdata->bss)
+		sdata = container_of(sdata->bss, struct ieee80211_sub_if_data, u.ap);
 
 	if (!WARN_ON(!test_sta_flag(sta, WLAN_STA_INSERTED)))
 		drv_change_sta_links(sdata->local, sdata, &sta->sta,

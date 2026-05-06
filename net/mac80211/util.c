@@ -4640,6 +4640,14 @@ void ieee80211_clear_tpe(struct ieee80211_parsed_tpe *tpe)
 	}
 }
 
+unsigned long ieee80211_get_scanning(struct ieee80211_hw *hw)
+{
+	struct ieee80211_local *local = hw_to_local(hw);
+
+	return local->scanning;
+}
+EXPORT_SYMBOL(ieee80211_get_scanning);
+
 bool ieee80211_vif_nan_started(struct ieee80211_vif *vif)
 {
 	struct ieee80211_sub_if_data *sdata = vif_to_sdata(vif);
