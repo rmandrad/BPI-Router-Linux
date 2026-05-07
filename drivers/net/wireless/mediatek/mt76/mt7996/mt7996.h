@@ -104,6 +104,7 @@
 #define MT7996_MAX_STA_TWT_AGRT		8
 #define MT7996_MIN_TWT_DUR		64
 #define MT7996_MAX_QUEUE		(__MT_RXQ_MAX +	__MT_MCUQ_MAX + 3)
+#define MT7996_IP_DSCP_NUM		64
 
 /* NOTE: used to map mt76_rates. idx may change if firmware expands table */
 #define MT7996_BASIC_RATES_TBL		31
@@ -277,6 +278,7 @@ struct mt7996_vif {
 	struct mt76_vif_data mt76;
 
 	struct mt7996_vif_link_info link_info[IEEE80211_MLD_MAX_NUM_LINKS];
+	u8 qos_map[MT7996_IP_DSCP_NUM];
 
 	u8 mld_group_idx;
 	u8 mld_remap_idx;
@@ -389,6 +391,11 @@ struct mt7996_phy {
 	bool has_aux_rx;
 	bool counter_reset;
 	bool rdd_tx_paused;
+
+	struct {
+		u8 scs_enable;
+		s8 sta_min_rssi;
+	} scs_ctrl;
 };
 
 struct mt7996_dev {
@@ -425,6 +432,7 @@ struct mt7996_dev {
 	struct work_struct rc_work;
 	struct work_struct dump_work;
 	struct work_struct reset_work;
+	struct delayed_work scs_work;
 	wait_queue_head_t reset_wait;
 	struct {
 		u32 state;
@@ -723,6 +731,13 @@ int mt7996_mcu_set_fixed_rate_ctrl(struct mt7996_dev *dev,
 				   void *data, u16 version);
 int mt7996_mcu_set_fixed_field(struct mt7996_dev *dev, struct mt7996_sta *msta,
 			       void *data, u8 link_id, u32 field);
+int mt7996_mcu_set_qos_map(struct mt7996_dev *dev, struct mt7996_vif_link *link,
+			   struct cfg80211_qos_map *qos_map);
+int mt7996_mcu_set_muru_qos_cfg(struct mt7996_dev *dev, u16 wlan_idx, u8 dir,
+				u8 scs_id, u8 req_type, u8 *qos_ie,
+				u8 qos_ie_len);
+int mt7996_mcu_set_scs(struct mt7996_phy *phy, u8 enable);
+void mt7996_mcu_scs_sta_poll(struct work_struct *work);
 int mt7996_mcu_set_eeprom(struct mt7996_dev *dev);
 int mt7996_mcu_get_eeprom(struct mt7996_dev *dev, u32 offset, u8 *buf, u32 buf_len);
 int mt7996_mcu_get_eeprom_free_block(struct mt7996_dev *dev, u8 *block_num);
@@ -875,6 +890,7 @@ void mt7996_set_stream_he_eht_caps(struct mt7996_phy *phy);
 void mt7996_set_stream_vht_txbf_caps(struct mt7996_phy *phy);
 void mt7996_update_channel(struct mt76_phy *mphy);
 int mt7996_init_debugfs(struct mt7996_dev *dev);
+void mt7996_vendor_register(struct mt7996_phy *phy);
 void mt7996_debugfs_rx_fw_monitor(struct mt7996_dev *dev, const void *data, int len);
 bool mt7996_debugfs_rx_log(struct mt7996_dev *dev, const void *data, int len);
 int mt7996_mcu_add_key(struct mt76_dev *dev, struct mt7996_vif_link *link,

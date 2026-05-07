@@ -66,6 +66,7 @@ static const struct ieee80211_iface_combination if_comb = {
 static const u8 if_types_ext_capa_ap[] = {
 	[0] = WLAN_EXT_CAPA1_EXT_CHANNEL_SWITCHING,
 	[2] = WLAN_EXT_CAPA3_MULTI_BSSID_SUPPORT,
+	[6] = WLAN_EXT_CAPA7_SCS_SUPPORT,
 	[7] = WLAN_EXT_CAPA8_OPMODE_NOTIF,
 };
 
@@ -510,6 +511,7 @@ mt7996_init_wiphy(struct ieee80211_hw *hw, struct mtk_wed_device *wed)
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_CAN_REPLACE_PTK0);
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_MU_MIMO_AIR_SNIFFER);
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_SET_SCAN_DWELL);
+	mt7996_vendor_register(&dev->phy);
 
 	if (mt7996_eeprom_has_background_radar(dev) &&
 	    (!mdev->dev->of_node ||
@@ -1580,6 +1582,10 @@ mt7996_init_eht_caps(struct mt7996_phy *phy, enum nl80211_band band,
 		u8_encode_bits(IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_11454,
 			       IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_MASK);
 
+	if (iftype == NL80211_IFTYPE_AP)
+		eht_cap_elem->mac_cap_info[0] |=
+			IEEE80211_EHT_MAC_CAP0_SCS_TRAFFIC_DESC;
+
 	eht_cap_elem->mac_cap_info[1] |=
 		IEEE80211_EHT_MAC_CAP1_MAX_AMPDU_LEN_MASK;
 
@@ -1748,6 +1754,7 @@ int mt7996_register_device(struct mt7996_dev *dev)
 	dev->mt76.phy.priv = &dev->phy;
 	INIT_WORK(&dev->rc_work, mt7996_mac_sta_rc_work);
 	INIT_DELAYED_WORK(&dev->mphy.mac_work, mt7996_mac_work);
+	INIT_DELAYED_WORK(&dev->scs_work, mt7996_mcu_scs_sta_poll);
 	INIT_LIST_HEAD(&dev->sta_rc_list);
 	INIT_LIST_HEAD(&dev->twt_list);
 

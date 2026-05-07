@@ -34,6 +34,10 @@ int mt7996_run(struct mt7996_phy *phy)
 	if (ret)
 		return ret;
 
+	ret = mt7996_mcu_set_scs(phy, 1);
+	if (ret)
+		return ret;
+
 	set_bit(MT76_STATE_RUNNING, &phy->mt76->state);
 
 	ieee80211_queue_delayed_work(dev->mphy.hw, &phy->mt76->mac_work,
@@ -90,6 +94,25 @@ static void mt7996_stop_phy(struct mt7996_phy *phy)
 
 static void mt7996_stop(struct ieee80211_hw *hw, bool suspend)
 {
+	struct mt7996_dev *dev = mt7996_hw_dev(hw);
+
+	cancel_delayed_work_sync(&dev->scs_work);
+}
+
+static void mt7996_init_qos_map(struct mt7996_vif *mvif)
+{
+	int i;
+
+	for (i = 0; i < MT7996_IP_DSCP_NUM; i++)
+		mvif->qos_map[i] = i >> 3;
+
+	mvif->qos_map[10] = mvif->qos_map[12] =
+		mvif->qos_map[14] = mvif->qos_map[16] = 0;
+	mvif->qos_map[18] = mvif->qos_map[20] = mvif->qos_map[22] = 3;
+	mvif->qos_map[24] = 4;
+	mvif->qos_map[40] = 5;
+	mvif->qos_map[44] = mvif->qos_map[46] = 6;
+	mvif->qos_map[48] = 7;
 }
 
 static inline int get_free_idx(u64 mask, u8 start, u8 end)
@@ -578,6 +601,7 @@ static int mt7996_add_interface(struct ieee80211_hw *hw,
 	}
 
 	mt76_vif_init(vif, &mvif->mt76);
+	mt7996_init_qos_map(mvif);
 
 	vif->offload_flags |= IEEE80211_OFFLOAD_ENCAP_4ADDR;
 	mvif->mt76.deflink_id = IEEE80211_LINK_UNSPECIFIED;
@@ -2489,9 +2513,39 @@ mt7996_net_fill_forward_path(struct ieee80211_hw *hw,
 		path->mtk_wdma.amsdu = msta_link->wcid.amsdu;
 	else
 		path->mtk_wdma.amsdu = 0;
+
+	if (path->mtk_wdma.amsdu)
+		path->mtk_wdma.tid = msta->vif->qos_map[path->mtk_wdma.tid >> 2];
+
 	ctx->dev = NULL;
 
 	return 0;
+}
+
+static int
+mt7996_set_qos_map(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+		   struct cfg80211_qos_map *qos_map)
+{
+	struct mt7996_dev *dev = mt7996_hw_dev(hw);
+	unsigned long valid_links = vif->valid_links ?: BIT(0);
+	unsigned int link_id;
+	int ret = 0;
+
+	mutex_lock(&dev->mt76.mutex);
+	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
+		struct mt7996_vif_link *link;
+
+		link = mt7996_vif_link(dev, vif, link_id);
+		if (!link)
+			continue;
+
+		ret = mt7996_mcu_set_qos_map(dev, link, qos_map);
+		if (ret)
+			break;
+	}
+	mutex_unlock(&dev->mt76.mutex);
+
+	return ret;
 }
 
 static int
@@ -2629,4 +2683,5 @@ const struct ieee80211_ops mt7996_ops = {
 	.change_sta_links = mt7996_mac_sta_change_links,
 	.reconfig_complete = mt7996_reconfig_complete,
 	.set_eml_op_mode = mt7996_set_eml_op_mode,
+	.set_qos_map = mt7996_set_qos_map,
 };

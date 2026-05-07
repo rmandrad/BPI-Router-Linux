@@ -5368,3 +5368,207 @@ int mt7996_mcu_cp_support(struct mt7996_dev *dev, u8 mode)
 	return mt76_mcu_send_msg(&dev->mt76, MCU_WA_EXT_CMD(CP_SUPPORT),
 				 &cp_mode, sizeof(cp_mode), true);
 }
+
+static void
+mt7996_fill_qos_map(struct mt7996_vif *mvif,
+		    struct cfg80211_qos_map *usr_qos_map)
+{
+	int i;
+
+	for (i = 0; i < MT7996_IP_DSCP_NUM; i++)
+		mvif->qos_map[i] = i >> 3;
+
+	mvif->qos_map[10] = mvif->qos_map[12] =
+		mvif->qos_map[14] = mvif->qos_map[16] = 0;
+	mvif->qos_map[18] = mvif->qos_map[20] = mvif->qos_map[22] = 3;
+	mvif->qos_map[24] = 4;
+	mvif->qos_map[40] = 5;
+	mvif->qos_map[44] = mvif->qos_map[46] = 6;
+	mvif->qos_map[48] = 7;
+
+	if (!usr_qos_map)
+		return;
+
+	for (i = 0; i < IEEE80211_NUM_UPS; i++) {
+		u8 low = usr_qos_map->up[i].low;
+		u8 high = usr_qos_map->up[i].high;
+
+		if (low < MT7996_IP_DSCP_NUM &&
+		    high < MT7996_IP_DSCP_NUM &&
+		    low <= high)
+			memset(mvif->qos_map + low, i, high - low + 1);
+	}
+
+	for (i = 0; i < usr_qos_map->num_des; i++) {
+		u8 dscp = usr_qos_map->dscp_exception[i].dscp;
+		u8 up = usr_qos_map->dscp_exception[i].up;
+
+		if (dscp < MT7996_IP_DSCP_NUM && up < IEEE80211_NUM_UPS)
+			mvif->qos_map[dscp] = up;
+	}
+}
+
+int mt7996_mcu_set_qos_map(struct mt7996_dev *dev, struct mt7996_vif_link *link,
+			   struct cfg80211_qos_map *qos_map)
+{
+	struct mt7996_vif *mvif = container_of(link->mt76.mvif,
+					       struct mt7996_vif, mt76);
+	struct {
+		u8 bss_idx;
+		u8 qos_map_enable;
+		u8 __rsv[2];
+		s8 qos_map[MT7996_IP_DSCP_NUM];
+	} __packed req = {
+		.bss_idx = link->mt76.idx,
+		.qos_map_enable = true,
+	};
+
+	mt7996_fill_qos_map(mvif, qos_map);
+	memcpy(req.qos_map, mvif->qos_map, sizeof(req.qos_map));
+
+	return mt76_mcu_send_msg(&dev->mt76, MCU_WA_EXT_CMD(SET_QOS_MAP),
+				 &req, sizeof(req), false);
+}
+
+int mt7996_mcu_set_muru_qos_cfg(struct mt7996_dev *dev, u16 wlan_idx, u8 dir,
+				u8 scs_id, u8 req_type, u8 *qos_ie,
+				u8 qos_ie_len)
+{
+#define QOS_FLAG_UPDATE	20
+#define QOS_FLAG_DELETE	21
+	struct {
+		u8 _rsv[4];
+
+		__le16 tag;
+		__le16 len;
+
+		__le32 qos_flag;
+		__le16 wlan_idx;
+		u8 _rsv2[12];
+		u8 dir;
+		u8 _rsv3[4];
+		u8 scs_id;
+		u8 qos_ie[44];
+	} __packed req = {
+		.tag = cpu_to_le16(UNI_CMD_MURU_SET_QOS_CFG),
+		.len = cpu_to_le16(sizeof(req) - 4),
+		.wlan_idx = cpu_to_le16(wlan_idx),
+		.scs_id = scs_id,
+	};
+
+	switch (req_type) {
+	case SCS_REQ_TYPE_ADD:
+	case SCS_REQ_TYPE_CHANGE:
+		if (qos_ie_len > sizeof(req.qos_ie))
+			return -EINVAL;
+
+		req.qos_flag = cpu_to_le32(QOS_FLAG_UPDATE);
+		req.dir = dir;
+		memcpy(req.qos_ie, qos_ie, qos_ie_len);
+		break;
+	case SCS_REQ_TYPE_REMOVE:
+		req.qos_flag = cpu_to_le32(QOS_FLAG_DELETE);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return mt76_mcu_send_msg(&dev->mt76, MCU_WM_UNI_CMD(MURU),
+				 &req, sizeof(req), true);
+}
+
+static int mt7996_mcu_set_scs_stats(struct mt7996_phy *phy)
+{
+	struct {
+		u8 band_idx;
+		u8 _rsv[3];
+
+		__le16 tag;
+		__le16 len;
+
+		u8 _rsv2[6];
+		s8 min_rssi;
+		u8 _rsv3;
+	} __packed req = {
+		.band_idx = phy->mt76->band_idx,
+		.tag = cpu_to_le16(UNI_CMD_SCS_SEND_DATA),
+		.len = cpu_to_le16(sizeof(req) - 4),
+		.min_rssi = phy->scs_ctrl.sta_min_rssi,
+	};
+
+	return mt76_mcu_send_msg(&phy->dev->mt76, MCU_WM_UNI_CMD(SCS),
+				 &req, sizeof(req), false);
+}
+
+static void mt7996_sta_rssi_work(void *data, struct ieee80211_sta *sta)
+{
+	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
+	struct mt7996_phy *phy = data;
+	unsigned long valid_links;
+	unsigned int link_id;
+
+	valid_links = sta->valid_links ?: BIT(msta->deflink_id);
+	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
+		struct mt7996_sta_link *link;
+
+		link = rcu_dereference(msta->link[link_id]);
+		if (!link || link->wcid.phy_idx != phy->mt76->band_idx)
+			continue;
+
+		if (phy->scs_ctrl.sta_min_rssi > link->ack_signal)
+			phy->scs_ctrl.sta_min_rssi = link->ack_signal;
+	}
+}
+
+void mt7996_mcu_scs_sta_poll(struct work_struct *work)
+{
+	struct mt7996_dev *dev = container_of(work, struct mt7996_dev,
+					      scs_work.work);
+	bool scs_enable = false;
+	struct mt7996_phy *phy;
+
+	mt7996_for_each_phy(dev, phy) {
+		if (!test_bit(MT76_STATE_RUNNING, &phy->mt76->state) ||
+		    !phy->scs_ctrl.scs_enable)
+			continue;
+
+		ieee80211_iterate_stations_atomic(phy->mt76->hw,
+						  mt7996_sta_rssi_work, phy);
+
+		scs_enable = true;
+		if (mt7996_mcu_set_scs_stats(phy))
+			dev_err(dev->mt76.dev, "failed to send SCS MCU command\n");
+		phy->scs_ctrl.sta_min_rssi = 0;
+	}
+
+	if (scs_enable)
+		ieee80211_queue_delayed_work(dev->mphy.hw, &dev->scs_work, HZ);
+}
+
+int mt7996_mcu_set_scs(struct mt7996_phy *phy, u8 enable)
+{
+	struct mt7996_dev *dev = phy->dev;
+	struct {
+		u8 band_idx;
+		u8 _rsv[3];
+
+		__le16 tag;
+		__le16 len;
+
+		u8 scs_enable;
+		u8 _rsv2[3];
+	} __packed req = {
+		.band_idx = phy->mt76->band_idx,
+		.tag = cpu_to_le16(UNI_CMD_SCS_ENABLE),
+		.len = cpu_to_le16(sizeof(req) - 4),
+		.scs_enable = enable,
+	};
+
+	phy->scs_ctrl.scs_enable = enable;
+
+	if (enable)
+		ieee80211_queue_delayed_work(dev->mphy.hw, &dev->scs_work, HZ);
+
+	return mt76_mcu_send_msg(&phy->dev->mt76, MCU_WM_UNI_CMD(SCS),
+				 &req, sizeof(req), false);
+}

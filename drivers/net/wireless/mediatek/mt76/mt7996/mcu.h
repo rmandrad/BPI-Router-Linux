@@ -916,6 +916,10 @@ enum {
 };
 
 enum {
+	UNI_CMD_MURU_SET_QOS_CFG = 0xfe,
+};
+
+enum {
 	UNI_POWER_OFF,
 };
 
@@ -943,6 +947,12 @@ enum{
 	UNI_CMD_SR_SET_SRG_BITMAP = 0x80,
 	UNI_CMD_SR_SET_PARAM = 0xc1,
 	UNI_CMD_SR_SET_SIGA = 0xd0,
+};
+
+enum {
+	UNI_CMD_SCS_SEND_DATA,
+	UNI_CMD_SCS_SET_PD_THR_RANGE = 2,
+	UNI_CMD_SCS_ENABLE,
 };
 
 enum {
@@ -988,6 +998,12 @@ enum {
 	UNI_CMD_SDO_SET = 1,
 	UNI_CMD_SDO_QUERY,
 	UNI_CMD_SDO_CP_MODE = 6,
+};
+
+enum {
+	SCS_REQ_TYPE_ADD,
+	SCS_REQ_TYPE_REMOVE,
+	SCS_REQ_TYPE_CHANGE,
 };
 
 enum {
