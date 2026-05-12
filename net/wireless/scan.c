@@ -2464,7 +2464,7 @@ size_t cfg80211_merge_profile(const u8 *ie, size_t ielen,
 		copied_len += next_sub->datalen;
 
 		mbssid_elem = next_mbssid;
-		sub_elem = next_sub
+		sub_elem = next_sub;
 	}
 
 	return copied_len;
