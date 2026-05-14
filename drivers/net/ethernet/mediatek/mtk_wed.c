@@ -2155,7 +2155,7 @@ mtk_wed_dma_enable(struct mtk_wed_device *dev)
 			MTK_WED_WDMA_RX_PREF_DDONE2_EN);
 		wed_set(dev, MTK_WED_WDMA_RX_PREF_CFG, MTK_WED_WDMA_RX_PREF_EN);
 
-		wed_clr(dev, MTK_WED_WPDMA_GLO_CFG,
+		wed_set(dev, MTK_WED_WPDMA_GLO_CFG,
 			MTK_WED_WPDMA_GLO_CFG_TX_DDONE_CHK_LAST);
 		wed_set(dev, MTK_WED_WPDMA_GLO_CFG,
 			MTK_WED_WPDMA_GLO_CFG_TX_DDONE_CHK |
@@ -2233,7 +2233,6 @@ mtk_wed_start_hw_rro(struct mtk_wed_device *dev, u32 irq_mask, bool reset)
 		return;
 	}
 
-	wed_set(dev, MTK_WED_RRO_RX_D_CFG(2), MTK_WED_RRO_MSDU_PG_DRV_CLR);
 	wed_w32(dev, MTK_WED_RRO_MSDU_PG_RING2_CFG,
 		MTK_WED_RRO_MSDU_PG_DRV_CLR);
 
