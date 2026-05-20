@@ -105,6 +105,7 @@
 #define MT7996_MIN_TWT_DUR		64
 #define MT7996_MAX_QUEUE		(__MT_RXQ_MAX +	__MT_MCUQ_MAX + 3)
 #define MT7996_IP_DSCP_NUM		64
+#define ADDBA_RETRY_PERIOD		(5 * HZ)
 
 /* NOTE: used to map mt76_rates. idx may change if firmware expands table */
 #define MT7996_BASIC_RATES_TBL		31
@@ -258,6 +259,7 @@ struct mt7996_sta {
 	struct mt7996_vif *vif;
 
 	bool stop_rx_ba_in_progress;
+	unsigned long last_addba_req_time[IEEE80211_NUM_TIDS];
 };
 
 struct mt7996_vif_link {
@@ -911,6 +913,7 @@ int mt7996_mcu_set_emlsr_mode(struct mt7996_dev *dev,
 			      struct ieee80211_vif *vif,
 			      struct ieee80211_sta *sta,
 			      struct ieee80211_eml_params *eml_params);
+int mt7996_mcu_ba_trigger_enable(struct mt7996_dev *dev, u8 enable);
 #ifdef CONFIG_MAC80211_DEBUGFS
 void mt7996_sta_add_debugfs(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			    struct ieee80211_sta *sta, struct dentry *dir);
@@ -921,6 +924,7 @@ void mt7996_link_sta_add_debugfs(struct ieee80211_hw *hw, struct ieee80211_vif *
 int mt7996_mmio_wed_init(struct mt7996_dev *dev, void *pdev_ptr,
 			 bool hif2, int *irq);
 u32 mt7996_wed_init_buf(void *ptr, dma_addr_t phys, int token_id);
+void mt7996_mac_ba_trigger(struct mt7996_dev *dev, u16 wlan_idx, u8 tid);
 
 #ifdef CONFIG_MTK_DEBUG
 int mt7996_mtk_init_debugfs(struct mt7996_phy *phy, struct dentry *dir);

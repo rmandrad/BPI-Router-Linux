@@ -42,4 +42,15 @@ struct mt7996_dfs_radar_spec {
 	struct mt7996_dfs_pattern radar_pattern[16];
 };
 
+#define MT7996_SDO_EVENT_COUNT			GENMASK(26, 20)
+#define MT7996_SDO_EVENT_DW_LEN			GENMASK(31, 27)
+#define MT7996_SDO_EVENT_ID			GENMASK(26, 21)
+
+#define MT7996_SDO_EVENT_BA_TRIG_WLAN_IDX	GENMASK(13, 0)
+#define MT7996_SDO_EVENT_BA_TRIG_TID		GENMASK(16, 14)
+
+enum {
+	MT7996_SDO_EVENT_BA_TRIGGER,
+};
+
 #endif
