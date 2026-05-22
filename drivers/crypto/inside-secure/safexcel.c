@@ -1036,6 +1036,7 @@ handle_results:
 	if (!nreq)
 		goto requests_left;
 
+	local_bh_disable();
 	for (i = 0; i < nreq; i++) {
 		req = safexcel_rdr_req_get(priv, ring);
 
@@ -1045,20 +1046,19 @@ handle_results:
 		if (ndesc < 0) {
 			dev_err(priv->dev, "failed to handle result (%d)\n",
 				ndesc);
-			goto acknowledge;
+			goto enable_bh;
 		}
 
-		if (should_complete) {
-			local_bh_disable();
+		if (should_complete)
 			crypto_request_complete(req, ret);
-			local_bh_enable();
-		}
 
 		tot_descs += ndesc;
 		handled++;
 	}
 
-acknowledge:
+enable_bh:
+	local_bh_enable();
+
 	if (i)
 		writel(EIP197_xDR_PROC_xD_PKT(i) |
 		       (tot_descs * priv->config.rd_offset),
