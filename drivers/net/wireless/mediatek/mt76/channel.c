@@ -372,6 +372,8 @@ int mt76_remain_on_channel(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	if (!phy)
 		return -EINVAL;
 
+	cancel_delayed_work_sync(&phy->mac_work);
+
 	mutex_lock(&dev->mutex);
 
 	if (phy->roc_vif || dev->scan.phy == phy ||

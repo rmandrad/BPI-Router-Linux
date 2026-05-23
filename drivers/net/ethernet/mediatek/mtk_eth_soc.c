@@ -816,6 +816,21 @@ static void mtk_set_max_mtu(struct mtk_mac *mac)
 		eth->netdev[mac->id]->max_mtu = MTK_MAX_RX_LENGTH_2K - MTK_RX_ETH_HLEN;
 }
 
+static int mtk_max_gmac_mtu(struct mtk_eth *eth)
+{
+	int i, max_mtu = 0;
+
+	for (i = 0; i < MTK_MAX_DEVS; i++) {
+		if (!eth->netdev[i])
+			continue;
+
+		if (eth->netdev[i]->mtu > max_mtu)
+			max_mtu = eth->netdev[i]->mtu;
+	}
+
+	return max_mtu;
+}
+
 bool mtk_shaper_is_available(struct mtk_eth *eth, int idx)
 {
 	int active = 0;
@@ -4187,7 +4202,7 @@ static int mtk_open(struct net_device *dev)
 	struct mtk_eth *eth = mac->hw;
 	struct mtk_mac *target_mac;
 	bool phy_powerdown;
-	int i, err, ppe_num;
+	int i, err, ppe_num, mtu;
 
 	ppe_num = eth->soc->ppe_num;
 	phy_powerdown = mtk_phy_should_powerdown(eth);
@@ -4246,6 +4261,10 @@ static int mtk_open(struct net_device *dev)
 
 				mtk_gdm_config(eth, target_mac->id, gdm_config);
 			}
+
+		mtu = mtk_max_gmac_mtu(eth);
+		for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
+			mtk_ppe_update_mtu(eth->ppe[i], mtu);
 
 		napi_enable(&eth->tx_napi);
 		napi_enable(&eth->rx_napi[0].napi);
@@ -5283,18 +5302,11 @@ static int mtk_change_mtu(struct net_device *dev, int new_mtu)
 {
 	struct mtk_mac *mac = netdev_priv(dev);
 	struct mtk_eth *eth = mac->hw;
-	int i, length, max_mtu = 0;
+	int i, length, max_mtu;
 
 	WRITE_ONCE(dev->mtu, new_mtu);
 
-	for (i = 0; i < MTK_MAX_DEVS; i++) {
-		if (!eth->netdev[i])
-			continue;
-
-		if (eth->netdev[i]->mtu > max_mtu)
-			max_mtu = eth->netdev[i]->mtu;
-	}
-
+	max_mtu = mtk_max_gmac_mtu(eth);
 	length = max_mtu + MTK_RX_ETH_HLEN;
 
 	if (rcu_access_pointer(eth->prog) &&
@@ -5310,6 +5322,9 @@ static int mtk_change_mtu(struct net_device *dev, int new_mtu)
 				  MTK_MAX_RX_LENGTH_UNIT;
 
 	mtk_set_mcr_max_rx(mac, eth->rx_buf_len);
+
+	for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
+		mtk_ppe_update_mtu(eth->ppe[i], max_mtu);
 
 	return 0;
 }
