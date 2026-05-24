@@ -1713,8 +1713,13 @@ mt7996_ampdu_action(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			msta->stop_rx_ba_in_progress = true;
 
 		ret = mt7996_mcu_add_rx_ba(dev, params, vif, false);
-		if (ret)
+		if (ret) {
 			msta->stop_rx_ba_in_progress = false;
+			dev_dbg(dev->mt76.dev,
+				"ignore rx BA teardown failure for %pM tid %u: %d\n",
+				sta->addr, tid, ret);
+			ret = 0;
+		}
 		break;
 	case IEEE80211_AMPDU_TX_OPERATIONAL:
 		mtxq->aggr = true;
@@ -1726,6 +1731,12 @@ mt7996_ampdu_action(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		mtxq->aggr = false;
 		clear_bit(tid, &msta->deflink.wcid.ampdu_state);
 		ret = mt7996_mcu_add_tx_ba(dev, params, vif, false);
+		if (ret) {
+			dev_dbg(dev->mt76.dev,
+				"ignore tx BA teardown failure for %pM tid %u action %u: %d\n",
+				sta->addr, tid, params->action, ret);
+			ret = 0;
+		}
 		break;
 	case IEEE80211_AMPDU_TX_START:
 		set_bit(tid, &msta->deflink.wcid.ampdu_state);
@@ -1735,7 +1746,12 @@ mt7996_ampdu_action(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		mtxq->aggr = false;
 		clear_bit(tid, &msta->deflink.wcid.ampdu_state);
 		ret = mt7996_mcu_add_tx_ba(dev, params, vif, false);
+		if (ret)
+			dev_dbg(dev->mt76.dev,
+				"ignore tx BA stop failure for %pM tid %u: %d\n",
+				sta->addr, tid, ret);
 		ieee80211_stop_tx_ba_cb_irqsafe(vif, sta->addr, tid);
+		ret = 0;
 		break;
 	}
 

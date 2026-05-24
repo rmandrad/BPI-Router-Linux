@@ -347,16 +347,10 @@ int __ieee80211_stop_tx_ba_session(struct sta_info *sta, u16 tid,
 		spin_unlock_bh(&sta->lock);
 		if (reason != AGG_STOP_DESTROY_STA)
 			return -EALREADY;
-		/*
-		 * Station destruction does a second teardown pass in
-		 * __sta_info_destroy_part2() to close the remaining race with
-		 * BA session startup. If a destroy-time stop is already in
-		 * progress from the first pass, retrying the flush request is
-		 * best-effort only, so don't warn if the driver rejects the
-		 * duplicate notification.
-		 */
+
 		params.action = IEEE80211_AMPDU_TX_STOP_FLUSH_CONT;
-		drv_ampdu_action(local, sta->sdata, &params);
+		ret = drv_ampdu_action(local, sta->sdata, &params);
+		WARN_ON_ONCE(ret);
 		return 0;
 	}
 
