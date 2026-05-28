@@ -367,7 +367,6 @@ enum mt76_wcid_flags {
 	MT_WCID_FLAG_PS,
 	MT_WCID_FLAG_4ADDR,
 	MT_WCID_FLAG_HDR_TRANS,
-	MT_WCID_FLAG_TDLS_PEER,
 };
 
 #define MT76_N_WCIDS 1088
@@ -545,7 +544,6 @@ struct mt76_hw_cap {
 #define MT_DRV_HW_MGMT_TXQ		BIT(4)
 #define MT_DRV_AMSDU_OFFLOAD		BIT(5)
 #define MT_DRV_IGNORE_TXS_FAILED	BIT(6)
-#define MT_DRV_HW_PS_BUFFERING		BIT(7)
 
 struct mt76_driver_ops {
 	u32 drv_flags;
@@ -1609,8 +1607,6 @@ void mt76_csa_finish(struct mt76_dev *dev);
 int mt76_get_antenna(struct ieee80211_hw *hw, int radio_idx, u32 *tx_ant,
 		     u32 *rx_ant);
 int mt76_set_tim(struct ieee80211_hw *hw, struct ieee80211_sta *sta, bool set);
-void mt76_sta_ps_transition(struct mt76_dev *dev, struct mt76_wcid *wcid,
-			    bool ps);
 void mt76_insert_ccmp_hdr(struct sk_buff *skb, u8 key_id);
 int mt76_get_rate(struct mt76_dev *dev,
 		  struct ieee80211_supported_band *sband,

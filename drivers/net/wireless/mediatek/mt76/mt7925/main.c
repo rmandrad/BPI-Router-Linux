@@ -883,9 +883,6 @@ static int mt7925_mac_link_sta_add(struct mt76_dev *mdev,
 	mlink->wcid.link_valid = !!link_sta->sta->valid_links;
 	mlink->sta = msta;
 
-	if (link_sta->sta->tdls)
-		set_bit(MT_WCID_FLAG_TDLS_PEER, &mlink->wcid.flags);
-
 	wcid = &mlink->wcid;
 	ewma_signal_init(&wcid->rssi);
 	rcu_assign_pointer(dev->mt76.wcid[wcid->idx], wcid);
@@ -1263,9 +1260,6 @@ mt7925_mac_sta_remove_links(struct mt792x_dev *dev, struct ieee80211_vif *vif,
 
 		if (vif->type == NL80211_IFTYPE_AP)
 			break;
-
-		if (vif->type == NL80211_IFTYPE_STATION && sta->tdls)
-			continue;
 
 		link_sta = mt792x_sta_to_link_sta(vif, sta, link_id);
 		if (!link_sta)
