@@ -785,6 +785,78 @@ mt7996_mcu_wed_rro_event(struct mt7996_dev *dev, struct sk_buff *skb)
 }
 
 static void
+mt7996_mcu_ps_transition(struct mt7996_dev *dev, u16 wcid_idx, bool ps)
+{
+	struct mt76_wcid *wcid;
+
+	wcid = mt76_wcid_ptr(dev, wcid_idx);
+	if (!wcid || !wcid_to_sta(wcid))
+		return;
+
+	mt76_sta_ps_transition(&dev->mt76, wcid, ps);
+}
+
+static void
+mt7996_mcu_rx_ps_sync(struct mt7996_dev *dev, struct sk_buff *skb)
+{
+	struct mt7996_mcu_ps_sync_event *event = (void *)skb->data;
+	struct tlv *tlv;
+	int len;
+
+	skb_pull(skb, sizeof(*event));
+
+	len = skb->len;
+	while (len > sizeof(*tlv)) {
+		u16 tag, tag_len;
+
+		tlv = (struct tlv *)skb->data;
+		tag = le16_to_cpu(tlv->tag);
+		tag_len = le16_to_cpu(tlv->len);
+		if (tag_len > len)
+			break;
+
+		switch (tag) {
+		case UNI_PS_CLIENT_INFO: {
+			struct mt7996_mcu_ps_client_info *info = (void *)tlv;
+
+			mt7996_mcu_ps_transition(dev,
+						 le16_to_cpu(info->wlan_idx),
+						 info->ps_bit);
+			break;
+		}
+		case UNI_PS_MULTI_CLIENT_INFO: {
+			struct mt7996_mcu_ps_multi_client_info *info = (void *)tlv;
+			u16 cnt = le16_to_cpu(info->sta_cnt);
+			int i;
+
+			for (i = 0; i < cnt; i++) {
+				u16 entry = le16_to_cpu(info->sta_ps_info[i]);
+
+				mt7996_mcu_ps_transition(dev,
+							 FIELD_GET(MT7996_PS_MULTI_WCID,
+								   entry),
+							 !!(entry & MT7996_PS_MULTI_PS_BIT));
+			}
+			break;
+		}
+		case UNI_PS_MULTI_CLIENT_INFO_BITMAP: {
+			u8 *bitmap = tlv->data;
+			int bitmap_len = tag_len - sizeof(*tlv);
+			int i;
+
+			for (i = 0; i < bitmap_len * 8; i++)
+				mt7996_mcu_ps_transition(dev, i,
+							 !!(bitmap[i / 8] & BIT(i % 8)));
+			break;
+		}
+		}
+
+		skb_pull(skb, tag_len);
+		len -= tag_len;
+	}
+}
+
+static void
 mt7996_mcu_uni_rx_unsolicited_event(struct mt7996_dev *dev, struct sk_buff *skb)
 {
 	struct mt7996_mcu_rxd *rxd = (struct mt7996_mcu_rxd *)skb->data;
@@ -804,6 +876,9 @@ mt7996_mcu_uni_rx_unsolicited_event(struct mt7996_dev *dev, struct sk_buff *skb)
 		break;
 	case MCU_UNI_EVENT_WED_RRO:
 		mt7996_mcu_wed_rro_event(dev, skb);
+		break;
+	case MCU_UNI_EVENT_PS_SYNC:
+		mt7996_mcu_rx_ps_sync(dev, skb);
 		break;
 	default:
 		break;
@@ -2224,6 +2299,11 @@ mt7996_mcu_sta_hdr_trans_tlv(struct mt7996_dev *dev, struct sk_buff *skb,
 	if (test_bit(MT_WCID_FLAG_4ADDR, &wcid->flags)) {
 		hdr_trans->to_ds = true;
 		hdr_trans->from_ds = true;
+	}
+
+	if (test_bit(MT_WCID_FLAG_TDLS_PEER, &wcid->flags)) {
+		hdr_trans->to_ds = false;
+		hdr_trans->from_ds = false;
 	}
 
 	if (vif->type == NL80211_IFTYPE_MESH_POINT) {
