@@ -298,7 +298,7 @@ mtk_wed_check_busy(struct mtk_wed_device *dev, u32 reg, u32 mask)
 static int
 mtk_wed_poll_busy(struct mtk_wed_device *dev, u32 reg, u32 mask)
 {
-	int sleep = 15000;
+	int sleep = 1000;
 	int timeout = 100 * sleep;
 	u32 val;
 
