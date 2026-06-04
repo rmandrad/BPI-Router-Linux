@@ -1853,6 +1853,18 @@ void mtk_w32(struct mtk_eth *eth, u32 val, unsigned reg);
 u32 mtk_r32(struct mtk_eth *eth, unsigned reg);
 u32 mtk_m32(struct mtk_eth *eth, u32 mask, u32 set, unsigned int reg);
 
+static inline void mtk_pse_wdma_enable(struct mtk_eth *eth, int id, bool enable)
+{
+	u32 val;
+
+	val = mtk_r32(eth, MTK_FE_GLO_CFG(PSE_WDMA_PORT(id)));
+	if (enable)
+		val &= ~MTK_FE_LINK_DOWN_P(PSE_WDMA_PORT(id));
+	else
+		val |= MTK_FE_LINK_DOWN_P(PSE_WDMA_PORT(id));
+	mtk_w32(eth, val, MTK_FE_GLO_CFG(PSE_WDMA_PORT(id)));
+}
+
 int mtk_gmac_sgmii_path_setup(struct mtk_eth *eth, int mac_id);
 int mtk_gmac_2p5gphy_path_setup(struct mtk_eth *eth, int mac_id);
 int mtk_gmac_gephy_path_setup(struct mtk_eth *eth, int mac_id);

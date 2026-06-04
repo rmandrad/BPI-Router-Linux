@@ -2554,6 +2554,7 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
 	ieee80211_stop_queues(hw);
 
 	cancel_work_sync(&dev->wed_rro.work);
+	cancel_delayed_work_sync(&dev->scs_work);
 	mt7996_for_each_phy(dev, phy)
 		cancel_delayed_work_sync(&phy->mt76->mac_work);
 

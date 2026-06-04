@@ -1762,6 +1762,8 @@ mtk_wed_reset_dma(struct mtk_wed_device *dev)
 	u32 val;
 	int i;
 
+	mtk_pse_wdma_enable(dev->hw->eth, dev->wdma_idx, false);
+
 	for (i = 0; i < ARRAY_SIZE(dev->tx_ring); i++) {
 		if (!dev->tx_ring[i].desc)
 			continue;
@@ -2434,6 +2436,7 @@ mtk_wed_start(struct mtk_wed_device *dev, u32 irq_mask)
 	mtk_wed_amsdu_init(dev);
 
 	mtk_wed_dma_enable(dev);
+	mtk_pse_wdma_enable(dev->hw->eth, dev->wdma_idx, true);
 	dev->running = true;
 }
 
