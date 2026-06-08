@@ -62,7 +62,7 @@ static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 	int i;
 
 	wcid = mt76_wcid_ptr(dev, idx);
-	if (!wcid || wcid == &dev->mt76.global_wcid)
+	if (!wcid || !wcid->sta)
 		return NULL;
 
 	if (!mt7996_band_valid(dev, band_idx))
@@ -88,10 +88,11 @@ static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 			continue;
 
 		msta_link = rcu_dereference(msta->link[i]);
-		break;
+		if (msta_link)
+			return &msta_link->wcid;
 	}
 
-	return &msta_link->wcid;
+	return NULL;
 }
 
 bool mt7996_mac_wtbl_update(struct mt7996_dev *dev, int idx, u32 mask)
