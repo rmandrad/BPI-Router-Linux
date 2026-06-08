@@ -1074,6 +1074,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	struct mt76_txwi_cache *t;
 	int id, i, pid, nbuf = tx_info->nbuf - 1;
 	bool is_8023 = info.flags & IEEE80211_TX_CTL_HW_80211_ENCAP;
+	bool wake = false;
 	__le32 *ptr = (__le32 *)txwi_ptr;
 	u8 *txwi = (u8 *)txwi_ptr;
 	u8 link_id;
@@ -1128,11 +1129,11 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 
 		link_conf = rcu_dereference(vif->link_conf[wcid->link_id]);
 		if (!link_conf)
-			return -EINVAL;
+			goto error_release_token;
 
 		link_sta = rcu_dereference(sta->link[wcid->link_id]);
 		if (!link_sta)
-			return -EINVAL;
+			goto error_release_token;
 
 		dma_sync_single_for_cpu(mdev->dma_dev, tx_info->buf[1].addr,
 					tx_info->buf[1].len, DMA_TO_DEVICE);
@@ -1237,6 +1238,13 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	tx_info->nbuf = MT_CT_DMA_BUF_NUM;
 
 	return 0;
+
+error_release_token:
+	mt76_token_release(mdev, id, &wake);
+	if (wake)
+		mt76_set_tx_blocked(mdev, false);
+
+	return -EINVAL;
 }
 
 u32 mt7996_wed_init_buf(void *ptr, dma_addr_t phys, int token_id)
