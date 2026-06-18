@@ -1847,34 +1847,23 @@ mtk_wed_reset_dma(struct mtk_wed_device *dev)
 			MTK_WED_WDMA_GLO_CFG_RST_INIT_COMPLETE);
 	}
 
-	/* 3. reset WED TX BM */
+	/* 3. reset WED WPDMA tx */
 	wed_clr(dev, MTK_WED_CTRL, MTK_WED_CTRL_WED_TX_FREE_AGENT_EN);
-	mtk_wed_poll_busy(dev, MTK_WED_CTRL,
-			  MTK_WED_CTRL_WED_TX_FREE_AGENT_BUSY);
 
 	for (i = 0; i < 100; i++) {
-		if (mtk_wed_is_v1(dev->hw)) {
+		if (mtk_wed_is_v1(dev->hw))
 			val = FIELD_GET(MTK_WED_TX_BM_INTF_TKFIFO_FDEP,
 					wed_r32(dev, MTK_WED_TX_BM_INTF));
-			if (val == 0x40)
-				break;
-		} else {
+		else
 			val = FIELD_GET(MTK_WED_TX_TKID_INTF_TKFIFO_FDEP,
 					wed_r32(dev, MTK_WED_TX_TKID_INTF));
-			if (val == 0x200)
-				break;
-		}
+		if (val == 0x40)
+			break;
 	}
 
 	mtk_wed_reset(dev, MTK_WED_RESET_TX_FREE_AGENT);
 	wed_clr(dev, MTK_WED_CTRL, MTK_WED_CTRL_WED_TX_BM_EN);
 	mtk_wed_reset(dev, MTK_WED_RESET_TX_BM);
-	mtk_wed_poll_busy(dev, MTK_WED_CTRL, MTK_WED_CTRL_WED_TX_BM_BUSY);
-
-	if (mtk_wed_is_v3_or_greater(dev->hw)) {
-		mtk_wed_free_tx_buffer(dev);
-		mtk_wed_tx_buffer_alloc(dev);
-	}
 
 	/* 4. reset WED WPDMA tx */
 	busy = mtk_wed_poll_busy(dev, MTK_WED_WPDMA_GLO_CFG,
