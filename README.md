@@ -1,3 +1,6 @@
+# 7.1 Note 27/06/26 need to add cn13/cn14 overlays 
+bootconf=#conf-base-r4pro-8x#ov-pro-sd#ov-pro-cn13#ov-pro-cn14
+
 # RSS / LRO
 
 HW-acceleration for ending traffic.
