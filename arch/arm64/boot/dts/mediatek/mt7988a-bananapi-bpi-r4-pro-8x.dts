@@ -15,7 +15,7 @@
 		     "mediatek,mt7988a";
 };
 
-/*&eth {
+&eth {
 	mux: mux-bus {
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -51,7 +51,7 @@
 	phy-connection-type = "usxgmii";
 	phy-handle = <&phy28>;
 	status = "okay";
-};*/
+};
 
 &mdio_bus {
 	/* external Airoha AN8831X connected to MXL switch */
@@ -114,7 +114,7 @@
 	};
 };
 
-/*&switch16 {
+&switch16 {
 	ds_mux: ds-mux-bus {
 		#address-cells = <1>;
 		#size-cells = <0>;
@@ -147,9 +147,9 @@
 	};
 
 	ports {
-		port13: port@13 {
-			reg = <13>;
-			label = "lan6";
+		port6: port@6 {
+			reg = <12>;
+			label = "lan4";
 			phy-mode = "10gbase-r";
 			phy-connection-type = "10gbase-r";
 			phy-handle = <&phy24>;
@@ -157,4 +157,4 @@
 		};
 
 	};
-};*/
+};

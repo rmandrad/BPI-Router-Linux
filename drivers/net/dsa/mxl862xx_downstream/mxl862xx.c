@@ -34,7 +34,7 @@
 	mxl862xx_api_wrap(dev, cmd, &(data), sizeof((data)), true)
 
 /* DSA port index is 0 based, the MXL FW has 1 as the base index */
-#define DSA_MXL_PORT(port) ((port))
+#define DSA_MXL_PORT(port) ((port) + 1)
 
 #define MXL862XX_SDMA_PCTRLP(p) (0xBC0 + ((p) * 0x6))
 #define MXL862XX_SDMA_PCTRL_EN BIT(0) /* SDMA Port Enable */
@@ -365,9 +365,11 @@ static enum dsa_tag_protocol mxl862_parse_tag_proto(struct dsa_switch *ds, uint8
 	if (ret)
 		return tag_proto;
 
-	if (!strcmp(user_protocol, "mxl862"))
+	if (!strcmp(user_protocol, "mxl862") ||
+	    !strcmp(user_protocol, "mxl862xx"))
 		tag_proto = DSA_TAG_PROTO_MXL862;
-	else if (!strcmp(user_protocol, "mxl862_8021q"))
+	else if (!strcmp(user_protocol, "mxl862_8021q") ||
+		 !strcmp(user_protocol, "mxl862xx-8021q"))
 		tag_proto = DSA_TAG_PROTO_MXL862_8021Q;
 	else
 		dev_warn(ds->dev,
