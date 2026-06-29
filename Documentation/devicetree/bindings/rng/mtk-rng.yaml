@@ -11,12 +11,15 @@ maintainers:
 
 properties:
   $nodename:
-    pattern: "^rng@[0-9a-f]+$"
+    pattern: "^(rng|trng)(@[0-9a-f]+)?$"
 
   compatible:
     oneOf:
       - enum:
           - mediatek,mt7623-rng
+          - mediatek,mt7981-rng
+          - mediatek,mt7987-rng
+          - mediatek,mt7988-rng
       - items:
           - enum:
               - mediatek,mt7622-rng
@@ -38,9 +41,21 @@ properties:
 
 required:
   - compatible
-  - reg
-  - clocks
-  - clock-names
+
+allOf:
+  - if:
+      not:
+        properties:
+          compatible:
+            enum:
+              - mediatek,mt7981-rng
+              - mediatek,mt7987-rng
+              - mediatek,mt7988-rng
+    then:
+      required:
+        - reg
+        - clocks
+        - clock-names
 
 additionalProperties: false
 

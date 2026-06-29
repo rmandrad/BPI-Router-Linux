@@ -297,6 +297,7 @@
 &gmac1 {
 	label = "sfp-wan";
 	phy-mode = "10gbase-r";
+	phy-connection-type = "10gbase-r";
 
 	status = "okay";
 };
@@ -304,6 +305,7 @@
 &gmac2 {
 	label = "dsa1";
 	phy-mode = "10gbase-r";
+	phy-connection-type = "10gbase-r";
 
 	status = "okay";
 

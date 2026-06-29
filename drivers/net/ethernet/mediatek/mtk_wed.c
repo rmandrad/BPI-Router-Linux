@@ -51,6 +51,28 @@
 static struct mtk_wed_hw *hw_list[3];
 static DEFINE_MUTEX(hw_lock);
 
+static int mtk_wed_get_region_resource(struct device_node *np,
+				       const char *name,
+				       const char *fallback_phandle,
+				       struct resource *res)
+{
+	struct device_node *target_np;
+	int ret;
+
+	ret = of_reserved_mem_region_to_resource_byname(np, name, res);
+	if (!ret || !fallback_phandle)
+		return ret;
+
+	target_np = of_parse_phandle(np, fallback_phandle, 0);
+	if (!target_np)
+		return ret;
+
+	ret = of_address_to_resource(target_np, 0, res);
+	of_node_put(target_np);
+
+	return ret;
+}
+
 struct mtk_wed_flow_block_priv {
 	struct mtk_wed_hw *hw;
 	struct net_device *dev;
@@ -1332,7 +1354,8 @@ mtk_wed_rro_alloc(struct mtk_wed_device *dev)
 	struct resource res;
 	int ret;
 
-	ret = of_reserved_mem_region_to_resource_byname(dev->hw->node, "wo-dlm", &res);
+	ret = mtk_wed_get_region_resource(dev->hw->node, "wo-dlm",
+					  "mediatek,wo-dlm", &res);
 	if (ret)
 		return ret;
 
@@ -2459,7 +2482,7 @@ mtk_wed_attach(struct mtk_wed_device *dev)
 		ret = mtk_wed_wo_init(hw);
 out:
 	if (ret) {
-		dev_err(dev->hw->dev, "failed to attach wed device\n");
+		dev_err(dev->hw->dev, "failed to attach wed device: %d\n", ret);
 		__mtk_wed_detach(dev);
 	}
 unlock:
