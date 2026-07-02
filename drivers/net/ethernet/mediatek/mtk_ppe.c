@@ -8,10 +8,17 @@
 #include <linux/platform_device.h>
 #include <linux/if_ether.h>
 #include <linux/if_vlan.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/socket.h>
 
 #include <net/dst_metadata.h>
 #include <net/dsa.h>
 #include <net/ipv6.h>
+#include <net/netfilter/nf_flow_table.h>
+#include <net/net_namespace.h>
+#include <net/netlink.h>
+#include <net/sock.h>
 
 #include "mtk_eth_soc.h"
 #include "mtk_ppe.h"
@@ -93,6 +100,21 @@ static int mtk_ppe_mib_wait_busy(struct mtk_ppe *ppe)
 	return ret;
 }
 
+static int mtk_ppe_cache_wait_busy(struct mtk_ppe *ppe)
+{
+	int ret;
+	u32 val;
+
+	ret = readl_poll_timeout_atomic(ppe->base + MTK_PPE_CACHE_CTL, val,
+					!(val & MTK_PPE_CACHE_CTL_REQ),
+					1000, MTK_PPE_WAIT_TIMEOUT_US);
+
+	if (ret)
+		dev_err(ppe->dev, "PPE cache busy");
+
+	return ret;
+}
+
 static int mtk_mib_entry_read(struct mtk_ppe *ppe, u16 index, u64 *bytes, u64 *packets)
 {
 	u32 val, cnt_r0, cnt_r1, cnt_r2;
@@ -127,15 +149,138 @@ static int mtk_mib_entry_read(struct mtk_ppe *ppe, u16 index, u64 *bytes, u64 *p
 	return 0;
 }
 
+static void mtk_ppe_cache_write(struct mtk_ppe *ppe, u32 line, u32 tag,
+				u32 state, u32 *data)
+{
+	struct mtk_eth *eth = ppe->eth;
+	u32 lines = mtk_is_netsys_v2_or_greater(eth) ? 128 : 32;
+	int i;
+
+	if (line >= lines) {
+		dev_warn(ppe->dev, "%s: invalid cache line %u in %s\n",
+			 __func__, line, ppe->dirname);
+		return;
+	}
+
+	if (state > 3) {
+		dev_warn(ppe->dev, "%s: invalid cache line state %u in %s line %u\n",
+			 __func__, state, ppe->dirname, line);
+		return;
+	}
+
+	if (!data)
+		goto write_tag;
+
+	for (i = 0; i < eth->soc->foe_entry_size / 4; i++) {
+		ppe_m32(ppe, MTK_PPE_CACHE_RW, MTK_PPE_CACHE_RW_LINE,
+			FIELD_PREP(MTK_PPE_CACHE_RW_LINE, line));
+		if (mtk_is_netsys_v3_or_greater(eth)) {
+			ppe_m32(ppe, MTK_PPE_CACHE_RW, MTK_PPE_CACHE_RW_OFFSET,
+				FIELD_PREP(MTK_PPE_CACHE_RW_OFFSET, i / 4));
+			ppe_m32(ppe, MTK_PPE_CACHE_CTL,
+				MTK_PPE_CACHE_CTL_DATA_SEL,
+				FIELD_PREP(MTK_PPE_CACHE_CTL_DATA_SEL, i % 4));
+		} else {
+			ppe_m32(ppe, MTK_PPE_CACHE_RW, MTK_PPE_CACHE_RW_OFFSET,
+				FIELD_PREP(MTK_PPE_CACHE_RW_OFFSET, i));
+		}
+
+		ppe_w32(ppe, MTK_PPE_CACHE_WDATA, data[i]);
+		ppe_m32(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_CMD,
+			FIELD_PREP(MTK_PPE_CACHE_CTL_CMD, 3));
+		ppe_set(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_REQ);
+		if (mtk_ppe_cache_wait_busy(ppe))
+			dev_warn(ppe->dev, "%s: write data timeout in %s line %u\n",
+				 __func__, ppe->dirname, line);
+	}
+
+write_tag:
+	ppe_m32(ppe, MTK_PPE_CACHE_RW, MTK_PPE_CACHE_RW_LINE,
+		FIELD_PREP(MTK_PPE_CACHE_RW_LINE, line));
+	ppe_m32(ppe, MTK_PPE_CACHE_RW, MTK_PPE_CACHE_RW_OFFSET,
+		FIELD_PREP(MTK_PPE_CACHE_RW_OFFSET, 0x1f));
+	ppe_m32(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_DATA_SEL,
+		FIELD_PREP(MTK_PPE_CACHE_CTL_DATA_SEL, 0));
+	ppe_w32(ppe, MTK_PPE_CACHE_WDATA, (state << 16) | tag);
+	ppe_m32(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_CMD,
+		FIELD_PREP(MTK_PPE_CACHE_CTL_CMD, 3));
+	ppe_set(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_REQ);
+	if (mtk_ppe_cache_wait_busy(ppe))
+		dev_warn(ppe->dev, "%s: write tag 0x%04x timeout in %s line %u\n",
+			 __func__, tag, ppe->dirname, line);
+}
+
 static void mtk_ppe_cache_clear(struct mtk_ppe *ppe)
 {
+	static const u32 mask = MTK_PPE_ALERT_TCP_FIN_RST_SYN |
+				MTK_PPE_MD_TOAP_BYP_CRSN0 |
+				MTK_PPE_MD_TOAP_BYP_CRSN1 |
+				MTK_PPE_MD_TOAP_BYP_CRSN2 |
+				MTK_PPE_FLOW_CFG_IP_PROTO_BLACKLIST |
+				MTK_PPE_FLOW_CFG_IP4_NAT_FRAG |
+				MTK_PPE_FLOW_CFG_IP4_HASH_GRE_KEY |
+				MTK_PPE_FLOW_CFG_IP6_HASH_GRE_KEY |
+				MTK_PPE_FLOW_CFG_CS0_RM_ALL_IP6_IP_EN |
+				MTK_PPE_FLOW_CFG_L2_HASH_ETH |
+				MTK_PPE_FLOW_CFG_L2_HASH_VID;
+	u32 cah_en, flow_cfg, scan_mode;
+	u32 i, idle, retry;
+
+	spin_lock_bh(&ppe->cache_lock);
+
+	flow_cfg = ppe_r32(ppe, MTK_PPE_FLOW_CFG);
+	ppe_w32(ppe, MTK_PPE_FLOW_CFG, flow_cfg & mask);
+	udelay(100);
+
+	for (retry = 0; retry < 10; retry++) {
+		for (i = 0, idle = 0; i < 3; i++) {
+			if (!(ppe_r32(ppe, MTK_PPE_CACHE_DBG) &
+			      MTK_PPE_CACHE_DBG_BUSY))
+				idle++;
+		}
+
+		if (idle >= 3)
+			break;
+
+		udelay(10);
+	}
+
+	if (retry >= 10) {
+		dev_info(ppe->dev, "%s: PPE cache idle check timeout\n",
+			 __func__);
+		goto out;
+	}
+
+	scan_mode = FIELD_GET(MTK_PPE_TB_CFG_SCAN_MODE,
+			      ppe_r32(ppe, MTK_PPE_TB_CFG));
+	ppe_clear(ppe, MTK_PPE_TB_CFG, MTK_PPE_TB_CFG_SCAN_MODE);
+
+	cah_en = FIELD_GET(MTK_PPE_CACHE_CTL_EN,
+			   ppe_r32(ppe, MTK_PPE_CACHE_CTL));
+	ppe_clear(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_EN);
+
 	ppe_set(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_CLEAR);
 	ppe_clear(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_CLEAR);
+
+	if (mtk_is_netsys_v2_or_greater(ppe->eth))
+		mtk_ppe_cache_write(ppe, 0, 0x7fff, 3, NULL);
+	else
+		mtk_ppe_cache_write(ppe, 0, 0x3fff, 3, NULL);
+
+	ppe_m32(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_EN,
+		FIELD_PREP(MTK_PPE_CACHE_CTL_EN, cah_en));
+	ppe_m32(ppe, MTK_PPE_TB_CFG, MTK_PPE_TB_CFG_SCAN_MODE,
+		FIELD_PREP(MTK_PPE_TB_CFG_SCAN_MODE, scan_mode));
+
+out:
+	ppe_w32(ppe, MTK_PPE_FLOW_CFG, flow_cfg);
+	spin_unlock_bh(&ppe->cache_lock);
 }
 
 static void mtk_ppe_cache_enable(struct mtk_ppe *ppe, bool enable)
 {
-	mtk_ppe_cache_clear(ppe);
+	if (enable)
+		mtk_ppe_cache_clear(ppe);
 
 	ppe_m32(ppe, MTK_PPE_CACHE_CTL, MTK_PPE_CACHE_CTL_EN,
 		enable * MTK_PPE_CACHE_CTL_EN);
@@ -209,6 +354,17 @@ mtk_foe_entry_ib2(struct mtk_eth *eth, struct mtk_foe_entry *entry)
 	return &entry->ipv4.ib2;
 }
 
+static inline u32 *
+mtk_foe_entry_udf(struct mtk_eth *eth, struct mtk_foe_entry *entry)
+{
+	int type = mtk_get_ib1_pkt_type(eth, entry->ib1);
+
+	if (type >= MTK_PPE_PKT_TYPE_IPV4_DSLITE)
+		return &entry->ipv6.udf;
+
+	return &entry->ipv4.udf_tsid;
+}
+
 int mtk_foe_entry_prepare(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			  int type, int l4proto, u8 pse_port, u8 *src_mac,
 			  u8 *dest_mac)
@@ -240,9 +396,6 @@ int mtk_foe_entry_prepare(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 		      FIELD_PREP(MTK_FOE_IB2_PORT_MG, port_mg) |
 		      FIELD_PREP(MTK_FOE_IB2_PORT_AG, 0x1f);
 	}
-
-	if (is_multicast_ether_addr(dest_mac))
-		val |= mtk_get_ib2_multicast_mask(eth);
 
 	ports_pad = 0xa5a5a500 | (l4proto & 0xff);
 	if (type == MTK_PPE_PKT_TYPE_IPV4_ROUTE)
@@ -368,20 +521,29 @@ int mtk_foe_entry_set_ipv6_tuple(struct mtk_eth *eth,
 }
 
 int mtk_foe_entry_set_dsa(struct mtk_eth *eth, struct mtk_foe_entry *entry,
-			  int port)
+			  int proto, int port)
 {
-	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+#if IS_ENABLED(CONFIG_NET_DSA)
+	struct mtk_foe_mac_info *l2;
 
-	l2->etype = BIT(port);
+	if (proto == DSA_TAG_PROTO_MXL862_8021Q) {
+		mtk_foe_entry_set_vlan(eth, entry, port + GENMASK(11, 10));
+	} else {
+		l2 = mtk_foe_entry_l2(eth, entry);
+		l2->etype = BIT(port);
 
-	if (!(entry->ib1 & mtk_get_ib1_vlan_layer_mask(eth)))
-		entry->ib1 |= mtk_prep_ib1_vlan_layer(eth, 1);
-	else
-		l2->etype |= BIT(8);
+		if (!(entry->ib1 & mtk_get_ib1_vlan_layer_mask(eth)))
+			entry->ib1 |= mtk_prep_ib1_vlan_layer(eth, 1);
+		else
+			l2->etype |= BIT(8);
 
-	entry->ib1 &= ~mtk_get_ib1_vlan_tag_mask(eth);
+		entry->ib1 &= ~mtk_get_ib1_vlan_tag_mask(eth);
+	}
 
 	return 0;
+#else
+	return -ENOTSUPP;
+#endif
 }
 
 int mtk_foe_entry_set_vlan(struct mtk_eth *eth, struct mtk_foe_entry *entry,
@@ -426,7 +588,7 @@ int mtk_foe_entry_set_pppoe(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 
 int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int wdma_idx, int txq, int bss, int wcid,
-			   bool amsdu_en)
+			   int tid, bool amsdu_en)
 {
 	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
 	u32 *ib2 = mtk_foe_entry_ib2(eth, entry);
@@ -439,6 +601,7 @@ int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 		l2->w3info = FIELD_PREP(MTK_FOE_WINFO_WCID_V3, wcid) |
 			     FIELD_PREP(MTK_FOE_WINFO_BSS_V3, bss);
 		l2->amsdu = FIELD_PREP(MTK_FOE_WINFO_AMSDU_EN, amsdu_en);
+		l2->amsdu |= FIELD_PREP(MTK_FOE_WINFO_AMSDU_TID, tid);
 		break;
 	case 2:
 		*ib2 &= ~MTK_FOE_IB2_PORT_MG_V2;
@@ -476,26 +639,245 @@ int mtk_foe_entry_set_queue(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 		*ib2 |= MTK_FOE_IB2_PSE_QOS;
 	}
 
+	if (mtk_is_netsys_v3_or_greater(eth)) {
+		struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+		l2->tport &= ~MTK_FOE_TPORT_IDX;
+		l2->tport |= FIELD_PREP(MTK_FOE_TPORT_IDX, TPORT_QDMA);
+	}
+
 	return 0;
 }
 
-static bool
-mtk_flow_entry_match(struct mtk_eth *eth, struct mtk_flow_entry *entry,
-		     struct mtk_foe_entry *data)
+unsigned int mtk_foe_entry_get_queue(struct mtk_eth *eth,
+				     struct mtk_foe_entry *entry)
+{
+	u32 *ib2 = mtk_foe_entry_ib2(eth, entry);
+
+	if (mtk_is_netsys_v2_or_greater(eth))
+		return FIELD_GET(MTK_FOE_IB2_QID_V2, *ib2);
+
+	return FIELD_GET(MTK_FOE_IB2_QID, *ib2);
+}
+
+int mtk_foe_entry_set_dscp(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			   u8 dscp)
+{
+	u32 *ib2 = mtk_foe_entry_ib2(eth, entry);
+
+	*ib2 &= ~MTK_FOE_IB2_DSCP;
+	*ib2 |= FIELD_PREP(MTK_FOE_IB2_DSCP, dscp);
+
+	if (mtk_is_netsys_v3_or_greater(eth) && eth->dscp_toggle) {
+		u32 *udf = mtk_foe_entry_udf(eth, entry);
+
+		*udf |= MTK_FOE_UDF_KEEP_ECN | MTK_FOE_UDF_KEEP_DSCP;
+	}
+
+	return 0;
+}
+
+int mtk_foe_entry_set_tops_entry(struct mtk_eth *eth,
+				 struct mtk_foe_entry *entry,
+				 int tops_entry)
+{
+	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+
+	l2->tinfo &= ~MTK_FOE_TOPS_ENTRY;
+	l2->tinfo |= FIELD_PREP(MTK_FOE_TOPS_ENTRY, tops_entry);
+
+	return 0;
+}
+
+int
+mtk_flow_entry_match_len(struct mtk_eth *eth, struct mtk_foe_entry *entry)
 {
 	int type, len;
 
-	if ((data->ib1 ^ entry->data.ib1) & MTK_FOE_IB1_UDP)
-		return false;
-
-	type = mtk_get_ib1_pkt_type(eth, entry->data.ib1);
+	type = mtk_get_ib1_pkt_type(eth, entry->ib1);
 	if (type > MTK_PPE_PKT_TYPE_IPV4_DSLITE)
 		len = offsetof(struct mtk_foe_entry, ipv6._rsv);
 	else
 		len = offsetof(struct mtk_foe_entry, ipv4.ib2);
 
+	return len;
+}
+
+bool
+mtk_flow_entry_match(struct mtk_eth *eth, struct mtk_flow_entry *entry,
+		     struct mtk_foe_entry *data, int len)
+{
+	if ((data->ib1 ^ entry->data.ib1) & MTK_FOE_IB1_UDP)
+		return false;
+
 	return !memcmp(&entry->data.data, &data->data, len - 4);
 }
+
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
+static bool mtk_foe_mac_match(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			      const u8 *mac)
+{
+	u8 src[ETH_ALEN], dest[ETH_ALEN];
+	__be32 hi;
+	__be16 lo;
+	int type;
+
+	type = mtk_get_ib1_pkt_type(eth, entry->ib1);
+	if (type > MTK_PPE_PKT_TYPE_IPV4_DSLITE) {
+		hi = htonl(entry->ipv6.l2.dest_mac_hi);
+		lo = htons(entry->ipv6.l2.dest_mac_lo);
+		memcpy(dest, &hi, sizeof(hi));
+		memcpy(dest + sizeof(hi), &lo, sizeof(lo));
+		hi = htonl(entry->ipv6.l2.src_mac_hi);
+		lo = htons(entry->ipv6.l2.src_mac_lo);
+		memcpy(src, &hi, sizeof(hi));
+		memcpy(src + sizeof(hi), &lo, sizeof(lo));
+	} else {
+		hi = htonl(entry->ipv4.l2.dest_mac_hi);
+		lo = htons(entry->ipv4.l2.dest_mac_lo);
+		memcpy(dest, &hi, sizeof(hi));
+		memcpy(dest + sizeof(hi), &lo, sizeof(lo));
+		hi = htonl(entry->ipv4.l2.src_mac_hi);
+		lo = htons(entry->ipv4.l2.src_mac_lo);
+		memcpy(src, &hi, sizeof(hi));
+		memcpy(src + sizeof(hi), &lo, sizeof(lo));
+	}
+
+	return ether_addr_equal(dest, mac) || ether_addr_equal(src, mac);
+}
+
+static bool mtk_ppe_check_wdma_path(struct mtk_eth *eth, struct mtk_foe_entry *foe)
+{
+	u32 *ib2 = mtk_foe_entry_ib2(eth, foe);
+	u32 sp;
+	u32 winfo = FIELD_GET(MTK_FOE_IB2_WDMA_WINFO, *ib2);
+
+	if (mtk_is_netsys_v2_or_greater(eth))
+		sp = FIELD_GET(MTK_FOE_IB2_DEST_PORT_V2, *ib2);
+	else
+		sp = FIELD_GET(MTK_FOE_IB2_DEST_PORT, *ib2);
+
+	if (winfo || sp == PSE_WDMA0_PORT || sp == PSE_WDMA1_PORT ||
+	    sp == PSE_WDMA2_PORT)
+		return true;
+
+	return false;
+}
+
+static int mtk_flow_offload_teardown_by_roaming(struct mtk_ppe *ppe, const u8 *mac)
+{
+	int count = 0;
+	int i, j;
+
+	if (!ppe)
+		return 0;
+
+	for (i = 0; i < MTK_PPE_ENTRIES; i++) {
+		struct mtk_foe_entry *entry = mtk_foe_get_entry(ppe, i);
+		struct flow_offload_tuple tuple = {};
+		int state;
+		int type;
+
+		state = FIELD_GET(MTK_FOE_IB1_STATE, entry->ib1);
+		if (state != MTK_FOE_STATE_BIND ||
+		    !mtk_foe_mac_match(ppe->eth, entry, mac) ||
+		    !mtk_ppe_check_wdma_path(ppe->eth, entry))
+			continue;
+
+		tuple.l4proto = (entry->ib1 & MTK_FOE_IB1_UDP) ?
+				IPPROTO_UDP : IPPROTO_TCP;
+		type = mtk_get_ib1_pkt_type(ppe->eth, entry->ib1);
+		if (type > MTK_PPE_PKT_TYPE_IPV4_DSLITE) {
+			tuple.l3proto = NFPROTO_IPV6;
+			tuple.src_port = htons(entry->ipv6.src_port);
+			tuple.dst_port = htons(entry->ipv6.dest_port);
+			for (j = 0; j < ARRAY_SIZE(entry->ipv6.src_ip); j++) {
+				tuple.src_v6.s6_addr32[j] = htonl(entry->ipv6.src_ip[j]);
+				tuple.dst_v6.s6_addr32[j] = htonl(entry->ipv6.dest_ip[j]);
+			}
+		} else {
+			tuple.l3proto = NFPROTO_IPV4;
+			tuple.src_port = htons(entry->ipv4.orig.src_port);
+			tuple.dst_port = htons(entry->ipv4.orig.dest_port);
+			tuple.src_v4.s_addr = htonl(entry->ipv4.orig.src_ip);
+			tuple.dst_v4.s_addr = htonl(entry->ipv4.orig.dest_ip);
+		}
+
+		flow_offload_teardown_by_tuple(&tuple);
+		count++;
+
+		if (ppe->eth->debug_level >= 6)
+			pr_info("mtk_ppe: deleted roaming flow entry=%x\n", i);
+	}
+
+	if (!count && ppe->eth->debug_level >= 4)
+		pr_warn("mtk_ppe: no roaming flow found in %s\n", ppe->dirname);
+
+	return count;
+}
+
+static void mtk_ppe_roam_handler(struct work_struct *work)
+{
+	struct mtk_eth *eth = container_of(work, struct mtk_eth, ppe_roam_work);
+	struct net_device *dev = NULL;
+	struct msghdr msg = {};
+	struct nlmsghdr *nlh;
+	struct ndmsg *ndm;
+	struct nlattr *nla;
+	struct kvec iov;
+	u8 mac[ETH_ALEN];
+	int ifindex;
+	int len;
+	int rem;
+	int i;
+
+	if (!eth->ppe_roam_sock)
+		return;
+
+	iov.iov_base = eth->ppe_roam_buf;
+	iov.iov_len = sizeof(eth->ppe_roam_buf);
+	msg.msg_namelen = sizeof(struct sockaddr_nl);
+
+	len = kernel_recvmsg(eth->ppe_roam_sock, &msg, &iov, 1, iov.iov_len, 0);
+	if (len <= 0)
+		goto out;
+
+	nlh = (struct nlmsghdr *)eth->ppe_roam_buf;
+	if (!NLMSG_OK(nlh, len) || nlh->nlmsg_type != RTM_NEWNEIGH)
+		goto out;
+
+	len = nlh->nlmsg_len - NLMSG_HDRLEN;
+	ndm = (struct ndmsg *)NLMSG_DATA(nlh);
+	if (ndm->ndm_family != PF_BRIDGE)
+		goto out;
+
+	ifindex = ndm->ndm_ifindex;
+	dev = dev_get_by_index(&init_net, ifindex);
+	if (!dev)
+		goto out;
+
+	if (!dev->ieee80211_ptr)
+		goto out;
+
+	rem = len - NLMSG_LENGTH(sizeof(*ndm));
+	nla = (struct nlattr *)((unsigned char *)ndm + sizeof(*ndm));
+	while (nla_ok(nla, rem)) {
+		if (nla_type(nla) == NDA_LLADDR) {
+			memcpy(mac, nla_data(nla), ETH_ALEN);
+			for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
+				mtk_flow_offload_teardown_by_roaming(eth->ppe[i], mac);
+			if (eth->debug_level >= 6)
+				pr_info("mtk_ppe: neighbor updated (%pM)\n", mac);
+		}
+		nla = nla_next(nla, &rem);
+	}
+
+out:
+	if (dev)
+		dev_put(dev);
+	if (!work_pending(&eth->ppe_roam_work))
+		schedule_work(&eth->ppe_roam_work);
+}
+#endif
 
 static void
 __mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
@@ -516,11 +898,27 @@ __mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
 	hlist_del_init(&entry->list);
 	if (entry->hash != 0xffff) {
 		struct mtk_foe_entry *hwe = mtk_foe_get_entry(ppe, entry->hash);
+		int state = FIELD_GET(MTK_FOE_IB1_STATE, hwe->ib1);
+
+		if (mtk_is_netsys_v3_or_greater(ppe->eth) &&
+		    ppe->eth->qos_toggle == 3) {
+			u32 *ib2 = mtk_foe_entry_ib2(ppe->eth, &entry->data);
+
+			if (*ib2 & MTK_FOE_IB2_PSE_QOS_V2) {
+				int queue = mtk_foe_entry_get_queue(ppe->eth,
+								    &entry->data);
+
+				spin_lock(&ppe->eth->qdma_shaper.lock);
+				mtk_shaper_update_refcnt(ppe->eth, queue, false);
+				spin_unlock(&ppe->eth->qdma_shaper.lock);
+			}
+		}
 
 		hwe->ib1 &= ~MTK_FOE_IB1_STATE;
 		hwe->ib1 |= FIELD_PREP(MTK_FOE_IB1_STATE, MTK_FOE_STATE_INVALID);
 		dma_wmb();
-		mtk_ppe_cache_clear(ppe);
+		if (state == MTK_FOE_STATE_BIND)
+			mtk_ppe_cache_clear(ppe);
 
 		if (ppe->accounting) {
 			struct mtk_foe_accounting *acct;
@@ -602,7 +1000,9 @@ mtk_flow_entry_update(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
 
 	hwe = mtk_foe_get_entry(ppe, entry->hash);
 	memcpy(&foe, hwe, ppe->eth->soc->foe_entry_size);
-	if (!mtk_flow_entry_match(ppe->eth, entry, &foe)) {
+	if (!mtk_flow_entry_match(ppe->eth, entry, &foe,
+				  mtk_flow_entry_match_len(ppe->eth,
+							   &entry->data))) {
 		entry->hash = 0xffff;
 		goto out;
 	}
@@ -620,7 +1020,8 @@ __mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_foe_entry *entry,
 	struct mtk_eth *eth = ppe->eth;
 	u16 timestamp = mtk_eth_timestamp(eth);
 	struct mtk_foe_entry *hwe;
-	u32 val;
+	u32 val, *ib2;
+	int queue;
 
 	if (mtk_is_netsys_v2_or_greater(eth)) {
 		entry->ib1 &= ~MTK_FOE_IB1_BIND_TIMESTAMP_V2;
@@ -630,6 +1031,21 @@ __mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_foe_entry *entry,
 		entry->ib1 &= ~MTK_FOE_IB1_BIND_TIMESTAMP;
 		entry->ib1 |= FIELD_PREP(MTK_FOE_IB1_BIND_TIMESTAMP,
 					 timestamp);
+	}
+
+	if (mtk_is_netsys_v3_or_greater(eth) && eth->qos_toggle == 3) {
+		ib2 = mtk_foe_entry_ib2(eth, entry);
+		if (*ib2 & MTK_FOE_IB2_PSE_QOS_V2) {
+			queue = mtk_foe_entry_get_queue(eth, entry);
+
+			spin_lock(&eth->qdma_shaper.lock);
+			if (mtk_shaper_is_available(eth, queue))
+				mtk_shaper_update_refcnt(eth, queue, true);
+			else
+				*ib2 &= ~(MTK_FOE_IB2_PSE_QOS_V2 |
+					  MTK_FOE_IB2_QID_V2);
+			spin_unlock(&eth->qdma_shaper.lock);
+		}
 	}
 
 	hwe = mtk_foe_get_entry(ppe, hash);
@@ -763,7 +1179,9 @@ void __mtk_ppe_check_skb(struct mtk_ppe *ppe, struct sk_buff *skb, u16 hash)
 			continue;
 		}
 
-		if (found || !mtk_flow_entry_match(ppe->eth, entry, hwe)) {
+		if (found || !mtk_flow_entry_match(ppe->eth, entry, hwe,
+						   mtk_flow_entry_match_len(ppe->eth,
+									    &entry->data))) {
 			if (entry->hash != 0xffff)
 				entry->hash = 0xffff;
 			continue;
@@ -899,6 +1317,7 @@ struct mtk_ppe *mtk_ppe_init(struct mtk_eth *eth, void __iomem *base, int index)
 	ppe->dev = dev;
 	ppe->version = eth->soc->offload_version;
 	ppe->accounting = accounting;
+	spin_lock_init(&ppe->cache_lock);
 
 	foe = dmam_alloc_coherent(ppe->dev,
 				  MTK_PPE_ENTRIES * soc->foe_entry_size,
@@ -949,6 +1368,7 @@ void mtk_ppe_deinit(struct mtk_eth *eth)
 			return;
 		rhashtable_destroy(&eth->ppe[i]->l2_flows);
 	}
+	rhashtable_destroy(&eth->flow_table);
 }
 
 static void mtk_ppe_init_foe_table(struct mtk_ppe *ppe)
@@ -1029,14 +1449,14 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 			 MTK_PPE_ENTRIES_SHIFT);
 	if (mtk_is_netsys_v2_or_greater(ppe->eth))
 		val |= MTK_PPE_TB_CFG_INFO_SEL;
+	if (mtk_is_netsys_v3_or_greater(ppe->eth))
+		val |= MTK_PPE_TB_CFG_KEEP_DSCP_ECN_EN;
 	if (!mtk_is_netsys_v3_or_greater(ppe->eth))
 		val |= MTK_PPE_TB_CFG_ENTRY_80B;
 	ppe_w32(ppe, MTK_PPE_TB_CFG, val);
 
 	ppe_w32(ppe, MTK_PPE_IP_PROTO_CHK,
 		MTK_PPE_IP_PROTO_CHK_IPV4 | MTK_PPE_IP_PROTO_CHK_IPV6);
-
-	mtk_ppe_cache_enable(ppe, true);
 
 	val = MTK_PPE_FLOW_CFG_IP6_3T_ROUTE |
 	      MTK_PPE_FLOW_CFG_IP6_5T_ROUTE |
@@ -1059,12 +1479,12 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 	      FIELD_PREP(MTK_PPE_UNBIND_AGE_DELTA, 3);
 	ppe_w32(ppe, MTK_PPE_UNBIND_AGE, val);
 
-	val = FIELD_PREP(MTK_PPE_BIND_AGE0_DELTA_UDP, 12) |
+	val = FIELD_PREP(MTK_PPE_BIND_AGE0_DELTA_UDP, 30) |
 	      FIELD_PREP(MTK_PPE_BIND_AGE0_DELTA_NON_L4, 1);
 	ppe_w32(ppe, MTK_PPE_BIND_AGE0, val);
 
 	val = FIELD_PREP(MTK_PPE_BIND_AGE1_DELTA_TCP_FIN, 1) |
-	      FIELD_PREP(MTK_PPE_BIND_AGE1_DELTA_TCP, 7);
+	      FIELD_PREP(MTK_PPE_BIND_AGE1_DELTA_TCP, 30);
 	ppe_w32(ppe, MTK_PPE_BIND_AGE1, val);
 
 	val = MTK_PPE_BIND_LIMIT0_QUARTER | MTK_PPE_BIND_LIMIT0_HALF;
@@ -1083,7 +1503,13 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 	      MTK_PPE_GLO_CFG_IP4_L4_CS_DROP |
 	      MTK_PPE_GLO_CFG_IP4_CS_DROP |
 	      MTK_PPE_GLO_CFG_FLOW_DROP_UPDATE;
+	if (mtk_is_netsys_v3_or_greater(ppe->eth)) {
+		val |= MTK_PPE_GLO_CFG_CS0_PIPE_EN |
+		       MTK_PPE_GLO_CFG_SRH_CACHE_FIRST_EN;
+	}
 	ppe_w32(ppe, MTK_PPE_GLO_CFG, val);
+
+	mtk_ppe_cache_enable(ppe, true);
 
 	ppe_w32(ppe, MTK_PPE_DEFAULT_CPU_PORT, 0);
 
@@ -1099,7 +1525,7 @@ void mtk_ppe_start(struct mtk_ppe *ppe)
 		ppe_m32(ppe, MTK_PPE_MIB_CFG, MTK_PPE_MIB_CFG_RD_CLR,
 			MTK_PPE_MIB_CFG_RD_CLR);
 		ppe_m32(ppe, MTK_PPE_MIB_CACHE_CTL, MTK_PPE_MIB_CACHE_CTL_EN,
-			MTK_PPE_MIB_CFG_RD_CLR);
+			MTK_PPE_MIB_CACHE_CTL_EN);
 	}
 }
 
@@ -1137,4 +1563,64 @@ int mtk_ppe_stop(struct mtk_ppe *ppe)
 	ppe_w32(ppe, MTK_PPE_FLOW_CFG, 0);
 
 	return 0;
+}
+
+int mtk_ppe_roaming_start(struct mtk_eth *eth)
+{
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
+	struct sockaddr_nl addr = {};
+	struct socket *sock = NULL;
+	int ret;
+
+	if (eth->ppe_roam_sock)
+		return -EEXIST;
+
+	INIT_WORK(&eth->ppe_roam_work, mtk_ppe_roam_handler);
+
+	ret = sock_create_kern(&init_net, AF_NETLINK, SOCK_RAW, NETLINK_ROUTE, &sock);
+	if (ret < 0) {
+		pr_warn("mtk_ppe: unable to create roaming socket\n");
+		return ret;
+	}
+
+	addr.nl_family = AF_NETLINK;
+	addr.nl_pid = 65534;
+	addr.nl_groups = BIT(RTNLGRP_NEIGH - 1);
+	ret = kernel_bind(sock, (struct sockaddr_unsized *)&addr, sizeof(addr));
+	if (ret < 0) {
+		pr_warn("mtk_ppe: unable to bind roaming socket\n");
+		sock_release(sock);
+		return ret;
+	}
+
+	eth->ppe_roam_sock = sock;
+	eth->ppe_roam_sock->sk->sk_rcvtimeo = msecs_to_jiffies(100);
+	schedule_work(&eth->ppe_roam_work);
+
+	if (eth->debug_level >= 2)
+		pr_info("mtk_ppe: roaming worker activated\n");
+
+	return 0;
+#else
+	return 0;
+#endif
+}
+
+int mtk_ppe_roaming_stop(struct mtk_eth *eth)
+{
+#if IS_REACHABLE(CONFIG_NF_FLOW_TABLE)
+	if (!eth->ppe_roam_sock)
+		return -ENOENT;
+
+	cancel_work_sync(&eth->ppe_roam_work);
+	sock_release(eth->ppe_roam_sock);
+	eth->ppe_roam_sock = NULL;
+
+	if (eth->debug_level >= 2)
+		pr_info("mtk_ppe: roaming worker deactivated\n");
+
+	return 0;
+#else
+	return -ENOENT;
+#endif
 }
