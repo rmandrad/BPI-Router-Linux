@@ -352,10 +352,6 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 	if (rhashtable_lookup(&eth->flow_table, &f->cookie, mtk_flow_ht_params))
 		return -EEXIST;
 
-	if (f->flow && f->flow->ct &&
-	    READ_ONCE(f->flow->ct->mark) == MTK_PPE_EXCEPTION_TAG)
-		return -EOPNOTSUPP;
-
 	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_META)) {
 		struct flow_match_meta match;
 
@@ -483,17 +479,8 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 		}
 	}
 
-	if (f->flow && f->flow->ct) {
-		const struct flow_offload_tuple *orig_tuple;
-
-		orig_tuple = &f->flow->tuplehash[FLOW_OFFLOAD_DIR_ORIGINAL].tuple;
-		ct = f->flow->ct;
-		ct_dir = f->cookie == (unsigned long)orig_tuple ?
-			 IP_CT_DIR_ORIGINAL : IP_CT_DIR_REPLY;
-#if IS_ENABLED(CONFIG_NF_CONNTRACK_MARK)
-		ct_mark = READ_ONCE(ct->mark);
-#endif
-	}
+	if (ct && ct_mark == MTK_PPE_EXCEPTION_TAG)
+		return -EOPNOTSUPP;
 
 	if (!is_valid_ether_addr(data.eth.h_source) ||
 	    !is_valid_ether_addr(data.eth.h_dest))
