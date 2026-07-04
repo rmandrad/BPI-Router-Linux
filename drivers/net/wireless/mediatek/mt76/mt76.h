@@ -13,10 +13,20 @@
 #include <linux/leds.h>
 #include <linux/usb.h>
 #include <linux/average.h>
+#include <linux/version.h>
+#if (IS_BUILTIN(CONFIG_NET_AIROHA_NPU) || IS_MODULE(CONFIG_NET_AIROHA_NPU))
 #include <linux/soc/airoha/airoha_offload.h>
+#else
+#include "airoha_offload.h"
+#endif
 #include <linux/soc/mediatek/mtk_wed.h>
+#include <net/netlink.h>
 #include <net/mac80211.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,6,0)
+#include <net/page_pool.h>
+#else
 #include <net/page_pool/helpers.h>
+#endif
 #include "util.h"
 #include "testmode.h"
 
@@ -28,6 +38,9 @@
 #define MT_TXQ_FREE_THR		32
 
 #define MT76_TOKEN_FREE_THR	64
+
+#define MT76_WED_WDS_MIN	256
+#define MT76_WED_WDS_MAX	272
 
 #define MT_QFLAG_WED_RING	GENMASK(1, 0)
 #define MT_QFLAG_WED_TYPE	GENMASK(4, 2)
@@ -361,6 +374,7 @@ enum mt76_wcid_flags {
 	MT_WCID_FLAG_PS,
 	MT_WCID_FLAG_4ADDR,
 	MT_WCID_FLAG_HDR_TRANS,
+	MT_WCID_FLAG_TDLS_PEER,
 };
 
 #define MT76_N_WCIDS 1088
@@ -471,7 +485,7 @@ struct mt76_rx_tid {
 
 	u8 started:1, stopped:1, timer_pending:1;
 
-	struct sk_buff *reorder_buf[] __counted_by(size);
+	struct sk_buff *reorder_buf[];
 };
 
 #define MT_TX_CB_DMA_DONE		BIT(0)
@@ -538,6 +552,7 @@ struct mt76_hw_cap {
 #define MT_DRV_HW_MGMT_TXQ		BIT(4)
 #define MT_DRV_AMSDU_OFFLOAD		BIT(5)
 #define MT_DRV_IGNORE_TXS_FAILED	BIT(6)
+#define MT_DRV_HW_PS_BUFFERING		BIT(7)
 
 struct mt76_driver_ops {
 	u32 drv_flags;
@@ -1536,6 +1551,8 @@ void mt76_release_buffered_frames(struct ieee80211_hw *hw,
 				  u16 tids, int nframes,
 				  enum ieee80211_frame_release_type reason,
 				  bool more_data);
+void mt76_sta_ps_transition(struct mt76_dev *dev, struct mt76_wcid *wcid,
+			    bool ps);
 bool mt76_has_tx_pending(struct mt76_phy *phy);
 int mt76_update_channel(struct mt76_phy *phy);
 void mt76_update_survey(struct mt76_phy *phy);
@@ -1771,6 +1788,7 @@ static inline void mt76_testmode_reset(struct mt76_phy *phy, bool disable)
 #endif
 }
 
+extern const struct nla_policy mt76_tm_policy[NUM_MT76_TM_ATTRS];
 
 /* internal */
 static inline struct ieee80211_hw *
@@ -2050,8 +2068,7 @@ static inline void mt76_put_page_pool_buf(void *buf, bool allow_direct)
 {
 	struct page *page = virt_to_head_page(buf);
 
-	page_pool_put_full_page(pp_page_to_nmdesc(page)->pp, page,
-				allow_direct);
+	page_pool_put_full_page(page->pp, page, allow_direct);
 }
 
 static inline void *

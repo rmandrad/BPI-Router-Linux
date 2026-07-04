@@ -664,7 +664,7 @@ mt7996_sta_hw_queue_read(void *data, struct ieee80211_sta *sta)
 		if (!mlink)
 			continue;
 
-		msta_link = rcu_dereference(msta->link[link_id]);
+		msta_link = mt7996_sta_link(msta, link_id);
 		if (!msta_link)
 			continue;
 
@@ -870,13 +870,46 @@ mt7996_rf_regval_set(void *data, u64 val)
 DEFINE_DEBUGFS_ATTRIBUTE(fops_rf_regval, mt7996_rf_regval_get,
 			 mt7996_rf_regval_set, "0x%08llx\n");
 
+static int mt7996_vow_atf_set(void *data, u64 val)
+{
+	struct mt7996_dev *dev = data;
+	struct mt7996_phy *phy;
+	int ret;
+
+	dev->vow_atf_en = !!val;
+
+	mt7996_for_each_phy(dev, phy) {
+		ret = mt7996_mcu_set_vow_drr_ctrl(dev, phy->mt76->band_idx, NULL,
+						  NULL,
+						  VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND, 0);
+		if (ret)
+			return ret;
+
+		ret = mt7996_mcu_set_vow_feature_ctrl(phy);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int mt7996_vow_atf_get(void *data, u64 *val)
+{
+	struct mt7996_dev *dev = data;
+
+	*val = dev->vow_atf_en;
+
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(fops_vow_atf, mt7996_vow_atf_get, mt7996_vow_atf_set,
+			 "%lld\n");
+
 int mt7996_init_debugfs(struct mt7996_dev *dev)
 {
 	struct dentry *dir;
 
 	dir = mt76_register_debugfs_fops(&dev->mphy, NULL);
-	if (!dir)
-		return -ENOMEM;
 
 	debugfs_create_file("hw-queues", 0400, dir, dev,
 			    &mt7996_hw_queues_fops);
@@ -896,6 +929,7 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
 	debugfs_create_devm_seqfile(dev->mt76.dev, "twt_stats", dir,
 				    mt7996_twt_stats);
 	debugfs_create_file("rf_regval", 0600, dir, dev, &fops_rf_regval);
+	debugfs_create_file("vow_atf", 0600, dir, dev, &fops_vow_atf);
 
 	debugfs_create_u32("dfs_hw_pattern", 0400, dir, &dev->hw_pattern);
 	debugfs_create_file("radar_trigger", 0200, dir, dev,
@@ -1042,7 +1076,7 @@ static ssize_t mt7996_link_sta_fixed_rate_set(struct file *file,
 
 	mutex_lock(&dev->mt76.mutex);
 
-	msta_link = mt76_dereference(msta->link[link_sta->link_id], &dev->mt76);
+	msta_link = mt7996_sta_link_protected(dev, msta, link_sta->link_id);
 	if (!msta_link) {
 		ret = -EINVAL;
 		goto out;

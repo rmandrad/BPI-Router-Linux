@@ -6,6 +6,7 @@
 #include <linux/platform_device.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/of.h>
+#include <linux/of_device.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/iopoll.h>
 #include <linux/reset.h>
@@ -284,15 +285,20 @@ static int mt798x_wmac_coninfra_check(struct mt7915_dev *dev)
 static int mt798x_wmac_coninfra_setup(struct mt7915_dev *dev)
 {
 	struct device *pdev = dev->mt76.dev;
-	struct resource res;
+	struct reserved_mem *rmem;
+	struct device_node *np;
 	u32 val;
-	int ret;
 
-	ret = of_reserved_mem_region_to_resource(pdev->of_node, 0, &res);
-	if (ret)
-		return ret;
+	np = of_parse_phandle(pdev->of_node, "memory-region", 0);
+	if (!np)
+		return -EINVAL;
 
-	val = (res.start >> 16) & MT_TOP_MCU_EMI_BASE_MASK;
+	rmem = of_reserved_mem_lookup(np);
+	of_node_put(np);
+	if (!rmem)
+		return -EINVAL;
+
+	val = (rmem->base >> 16) & MT_TOP_MCU_EMI_BASE_MASK;
 
 	if (is_mt7986(&dev->mt76)) {
 		/* Set conninfra subsys PLL check */
@@ -313,8 +319,8 @@ static int mt798x_wmac_coninfra_setup(struct mt7915_dev *dev)
 			       MT_TOP_EFUSE_BASE_MASK, 0x11f20000 >> 16);
 	}
 
-	mt76_wr(dev, MT_INFRA_BUS_EMI_START, res.start);
-	mt76_wr(dev, MT_INFRA_BUS_EMI_END, resource_size(&res));
+	mt76_wr(dev, MT_INFRA_BUS_EMI_START, rmem->base);
+	mt76_wr(dev, MT_INFRA_BUS_EMI_END, rmem->size);
 
 	mt76_rr(dev, MT_CONN_INFRA_EFUSE);
 
@@ -1277,11 +1283,20 @@ free_device:
 	return ret;
 }
 
-static void mt798x_wmac_remove(struct platform_device *pdev)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
+static int
+#else
+static void
+#endif
+mt798x_wmac_remove(struct platform_device *pdev)
 {
 	struct mt7915_dev *dev = platform_get_drvdata(pdev);
 
 	mt7915_unregister_device(dev);
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0)
+	return 0;
+#endif
 }
 
 static const struct of_device_id mt798x_wmac_of_match[] = {
