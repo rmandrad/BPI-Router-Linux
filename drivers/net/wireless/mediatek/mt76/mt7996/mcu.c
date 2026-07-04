@@ -5102,10 +5102,10 @@ mt7996_mcu_set_obss_spr_bitmap(struct mt7996_phy *phy,
 		__le16 tag;
 		__le16 len;
 
-		__le32 color_l[2];
-		__le32 color_h[2];
-		__le32 bssid_l[2];
-		__le32 bssid_h[2];
+		__le32 color_l[MT7996_MAX_RADIOS];
+		__le32 color_h[MT7996_MAX_RADIOS];
+		__le32 bssid_l[MT7996_MAX_RADIOS];
+		__le32 bssid_h[MT7996_MAX_RADIOS];
 	} __packed req = {
 		.band_idx = phy->mt76->band_idx,
 		.tag = cpu_to_le16(UNI_CMD_SR_SET_SRG_BITMAP),
