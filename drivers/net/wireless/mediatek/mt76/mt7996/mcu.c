@@ -848,18 +848,21 @@ mt7996_mcu_rx_ps_sync(struct mt7996_dev *dev, struct sk_buff *skb)
 	skb_pull(skb, sizeof(*event));
 
 	len = skb->len;
-	while (len > sizeof(*tlv)) {
+	while (len >= sizeof(*tlv)) {
 		u16 tag, tag_len;
 
 		tlv = (struct tlv *)skb->data;
 		tag = le16_to_cpu(tlv->tag);
 		tag_len = le16_to_cpu(tlv->len);
-		if (tag_len > len)
+		if (tag_len < sizeof(*tlv) || tag_len > len)
 			break;
 
 		switch (tag) {
 		case UNI_PS_CLIENT_INFO: {
 			struct mt7996_mcu_ps_client_info *info = (void *)tlv;
+
+			if (tag_len < sizeof(*info))
+				break;
 
 			mt7996_mcu_ps_transition(dev,
 						 le16_to_cpu(info->wlan_idx),
@@ -868,9 +871,16 @@ mt7996_mcu_rx_ps_sync(struct mt7996_dev *dev, struct sk_buff *skb)
 		}
 		case UNI_PS_MULTI_CLIENT_INFO: {
 			struct mt7996_mcu_ps_multi_client_info *info = (void *)tlv;
-			u16 cnt = le16_to_cpu(info->sta_cnt);
+			u16 cnt;
+			u16 max_cnt;
 			int i;
 
+			if (tag_len < sizeof(*info))
+				break;
+
+			max_cnt = (tag_len - sizeof(*info)) /
+				  sizeof(info->sta_ps_info[0]);
+			cnt = min_t(u16, le16_to_cpu(info->sta_cnt), max_cnt);
 			for (i = 0; i < cnt; i++) {
 				u16 entry = le16_to_cpu(info->sta_ps_info[i]);
 
@@ -882,7 +892,8 @@ mt7996_mcu_rx_ps_sync(struct mt7996_dev *dev, struct sk_buff *skb)
 		}
 		case UNI_PS_MULTI_CLIENT_INFO_BITMAP: {
 			u8 *bitmap = tlv->data;
-			int bitmap_len = tag_len - sizeof(*tlv);
+			int bitmap_len = min_t(int, tag_len - sizeof(*tlv),
+					       DIV_ROUND_UP(ARRAY_SIZE(dev->mt76.wcid), 8));
 			int i;
 
 			for (i = 0; i < bitmap_len * 8; i++)
@@ -931,7 +942,9 @@ void mt7996_mcu_rx_event(struct mt7996_dev *dev, struct sk_buff *skb)
 {
 	struct mt7996_mcu_rxd *rxd = (struct mt7996_mcu_rxd *)skb->data;
 
-	if (rxd->option & MCU_UNI_CMD_UNSOLICITED_EVENT) {
+	if ((rxd->option & MCU_UNI_CMD_UNSOLICITED_EVENT) ||
+	    ((rxd->option & MCU_UNI_CMD_EVENT) &&
+	     rxd->eid == MCU_UNI_EVENT_PS_SYNC)) {
 		mt7996_mcu_uni_rx_unsolicited_event(dev, skb);
 		return;
 	}
