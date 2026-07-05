@@ -1524,6 +1524,11 @@ static void mt7996_tx(struct ieee80211_hw *hw,
 			link_id = mvif->mt76.deflink_id;
 	}
 
+	if (link_id >= IEEE80211_MLD_MAX_NUM_LINKS) {
+		ieee80211_free_txskb(hw, skb);
+		goto unlock;
+	}
+
 	if (vif && ieee80211_vif_is_mld(vif)) {
 		struct ieee80211_bss_conf *link_conf;
 

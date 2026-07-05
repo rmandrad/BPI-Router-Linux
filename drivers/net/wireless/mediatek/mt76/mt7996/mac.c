@@ -16,7 +16,7 @@
 static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 					    u16 idx, u8 band_idx)
 {
-	struct mt7996_sta_link *msta_link;
+	struct mt7996_sta_link *msta_link, *link = NULL;
 	struct mt7996_sta *msta;
 	struct mt7996_vif *mvif;
 	struct mt76_wcid *wcid;
@@ -48,11 +48,11 @@ static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 		if (mlink->band_idx != band_idx)
 			continue;
 
-		msta_link = mt7996_sta_link(msta, i);
+		link = mt7996_sta_link(msta, i);
 		break;
 	}
 
-	return &msta_link->wcid;
+	return link ? &link->wcid : NULL;
 }
 
 bool mt7996_mac_wtbl_update(struct mt7996_dev *dev, int idx, u32 mask)
@@ -168,7 +168,10 @@ static void mt7996_mac_sta_poll(struct mt7996_dev *dev)
 		rssi[2] = to_rssi(GENMASK(23, 16), val);
 		rssi[3] = to_rssi(GENMASK(31, 14), val);
 
-		mlink = rcu_dereference(msta->vif->mt76.link[wcid->link_id]);
+		if (wcid->link_id < ARRAY_SIZE(msta->vif->mt76.link))
+			mlink = rcu_dereference(msta->vif->mt76.link[wcid->link_id]);
+		else
+			mlink = NULL;
 		if (mlink) {
 			struct mt76_phy *mphy = mt76_vif_link_phy(mlink);
 
@@ -879,7 +882,7 @@ void mt7996_mac_write_txwi(struct mt7996_dev *dev, __le32 *txwi,
 	if (mvif) {
 		if (wcid->offchannel)
 			mlink = rcu_dereference(mvif->mt76.offchannel_link);
-		if (!mlink && link_id != IEEE80211_LINK_UNSPECIFIED)
+		if (!mlink && link_id < ARRAY_SIZE(mvif->mt76.link))
 			mlink = rcu_dereference(mvif->mt76.link[link_id]);
 	}
 
@@ -1010,6 +1013,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	struct mt76_txwi_cache *t;
 	int id, i, pid, nbuf = tx_info->nbuf - 1;
 	bool is_8023 = info->flags & IEEE80211_TX_CTL_HW_80211_ENCAP;
+	bool wake = false;
 	__le32 *ptr = (__le32 *)txwi_ptr;
 	u8 *txwi = (u8 *)txwi_ptr;
 	u8 link_id;
@@ -1042,7 +1046,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 
 			if (msta_link)
 				wcid = &msta_link->wcid;
-		} else if (mvif) {
+		} else if (mvif && link_id < ARRAY_SIZE(mvif->mt76.link)) {
 			mlink = rcu_dereference(mvif->mt76.link[link_id]);
 			if (mlink && mlink->wcid)
 				wcid = mlink->wcid;
@@ -1060,10 +1064,14 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	 * compatible with 802.11 EAPOL frame, we do the translation by
 	 * software
 	 */
-	if (tx_info->skb->protocol == cpu_to_be16(ETH_P_PAE) && sta->mlo) {
+	if (tx_info->skb->protocol == cpu_to_be16(ETH_P_PAE) &&
+	    sta && sta->mlo) {
 		struct ieee80211_hdr *hdr = (void *)tx_info->skb->data;
 		struct ieee80211_bss_conf *link_conf;
 		struct ieee80211_link_sta *link_sta;
+
+		if (!vif || wcid->link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
+			goto error_release_token;
 
 		link_conf = rcu_dereference(vif->link_conf[wcid->link_id]);
 		if (!link_conf)
@@ -1158,7 +1166,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 		if (mvif) {
 			if (wcid->offchannel)
 				mlink = rcu_dereference(mvif->mt76.offchannel_link);
-			if (!mlink)
+			if (!mlink && wcid->link_id < ARRAY_SIZE(mvif->mt76.link))
 				mlink = rcu_dereference(mvif->mt76.link[wcid->link_id]);
 
 			txp->fw.bss_idx = mlink ? mlink->idx : mvif->deflink.mt76.idx;
@@ -1178,7 +1186,10 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	return 0;
 
 error_release_token:
-	mt76_token_release(mdev, id, NULL);
+	mt76_token_release(mdev, id, &wake);
+	if (wake)
+		mt76_set_tx_blocked(mdev, false);
+
 	return -EINVAL;
 }
 
@@ -1337,6 +1348,9 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
 				link_sta = NULL;
 				goto next;
 			}
+
+			if (wcid->link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
+				goto next;
 
 			link_sta = rcu_dereference(sta->link[wcid->link_id]);
 			if (!link_sta)

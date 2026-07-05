@@ -484,9 +484,11 @@ mt7996_mcu_ie_countdown(struct mt7996_dev *dev, struct sk_buff *skb)
 	struct mt7996_mcu_rxd *rxd = (struct mt7996_mcu_rxd *)skb->data;
 	const char *data = (char *)&rxd[1], *tail;
 	struct header *hdr = (struct header *)data;
-	struct tlv *tlv = (struct tlv *)(data + 4);
 	struct mt7996_mcu_countdown_notify *event;
 	struct mt7996_mcu_countdown_data cdata;
+
+	if (skb->len < sizeof(*rxd) + sizeof(*hdr))
+		return;
 
 	if (hdr->band >= ARRAY_SIZE(dev->mt76.phys))
 		return;
@@ -497,7 +499,14 @@ mt7996_mcu_ie_countdown(struct mt7996_dev *dev, struct sk_buff *skb)
 
 	tail = skb->data + skb->len;
 	data += sizeof(*hdr);
-	while (data + sizeof(*tlv) < tail && le16_to_cpu(tlv->len)) {
+	while (data + sizeof(struct tlv) <= tail) {
+		struct tlv *tlv = (struct tlv *)data;
+		u16 tlv_len = le16_to_cpu(tlv->len);
+
+		if (tlv_len < sizeof(*tlv) + sizeof(*event) ||
+		    data + tlv_len > tail)
+			break;
+
 		event = (struct mt7996_mcu_countdown_notify *)tlv->data;
 
 		cdata.omac_idx = event->omac_idx;
@@ -517,8 +526,7 @@ mt7996_mcu_ie_countdown(struct mt7996_dev *dev, struct sk_buff *skb)
 			break;
 		}
 
-		data += le16_to_cpu(tlv->len);
-		tlv = (struct tlv *)data;
+		data += tlv_len;
 	}
 }
 
@@ -573,8 +581,12 @@ mt7996_mcu_rx_log_message(struct mt7996_dev *dev, struct sk_buff *skb)
 #define UNI_EVENT_FW_LOG_FORMAT 0
 	struct mt7996_mcu_rxd *rxd = (struct mt7996_mcu_rxd *)skb->data;
 	const char *data = (char *)&rxd[1] + 4, *type;
+	const char *tail = (char *)skb->data + skb->len;
 	struct tlv *tlv = (struct tlv *)data;
 	int len;
+
+	if (skb->len < sizeof(*rxd))
+		return;
 
 	if (!(rxd->option & MCU_UNI_CMD_EVENT)) {
 		len = skb->len - sizeof(*rxd);
@@ -582,11 +594,18 @@ mt7996_mcu_rx_log_message(struct mt7996_dev *dev, struct sk_buff *skb)
 		goto out;
 	}
 
+	if (skb->len < sizeof(*rxd) + 4 + sizeof(*tlv))
+		return;
+
+	len = le16_to_cpu(tlv->len);
+	if (len < sizeof(*tlv) + 4 || data + len > tail)
+		return;
+
 	if (le16_to_cpu(tlv->tag) != UNI_EVENT_FW_LOG_FORMAT)
 		return;
 
 	data += sizeof(*tlv) + 4;
-	len = le16_to_cpu(tlv->len) - sizeof(*tlv) - 4;
+	len -= sizeof(*tlv) + 4;
 
 out:
 	switch (rxd->s2d_index) {
@@ -648,18 +667,41 @@ static void
 mt7996_mcu_rx_all_sta_info_event(struct mt7996_dev *dev, struct sk_buff *skb)
 {
 	struct mt7996_mcu_all_sta_info_event *res;
-	u16 i;
+	size_t entry_len, payload_len;
+	u16 i, sta_num, tag;
+
+	if (skb->len < sizeof(struct mt7996_mcu_rxd) + sizeof(*res))
+		return;
 
 	skb_pull(skb, sizeof(struct mt7996_mcu_rxd));
 
 	res = (struct mt7996_mcu_all_sta_info_event *)skb->data;
+	tag = le16_to_cpu(res->tag);
 
-	for (i = 0; i < le16_to_cpu(res->sta_num); i++) {
+	switch (tag) {
+	case UNI_ALL_STA_TXRX_RATE:
+		entry_len = sizeof(res->rate[0]);
+		break;
+	case UNI_ALL_STA_TXRX_ADM_STAT:
+		entry_len = sizeof(res->adm_stat[0]);
+		break;
+	case UNI_ALL_STA_TXRX_MSDU_COUNT:
+		entry_len = sizeof(res->msdu_cnt[0]);
+		break;
+	default:
+		return;
+	}
+
+	payload_len = skb->len - sizeof(*res);
+	sta_num = min_t(u16, le16_to_cpu(res->sta_num),
+			payload_len / entry_len);
+
+	for (i = 0; i < sta_num; i++) {
 		u8 ac;
 		u16 wlan_idx;
 		struct mt76_wcid *wcid;
 
-		switch (le16_to_cpu(res->tag)) {
+		switch (tag) {
 		case UNI_ALL_STA_TXRX_RATE:
 			wlan_idx = le16_to_cpu(res->rate[i].wlan_idx);
 			wcid = mt76_wcid_ptr(dev, wlan_idx);
@@ -766,13 +808,22 @@ static void
 mt7996_mcu_wed_rro_event(struct mt7996_dev *dev, struct sk_buff *skb)
 {
 	struct mt7996_mcu_wed_rro_event *event = (void *)skb->data;
+	u16 len, tag;
 
 	if (!mt7996_has_hwrro(dev))
 		return;
 
+	if (skb->len < sizeof(*event))
+		return;
+
+	len = le16_to_cpu(event->len);
+	if (len < sizeof(struct tlv) || len > skb->len - sizeof(event->rxd))
+		return;
+
+	tag = le16_to_cpu(event->tag);
 	skb_pull(skb, sizeof(struct mt7996_mcu_rxd) + 4);
 
-	switch (le16_to_cpu(event->tag)) {
+	switch (tag) {
 	case UNI_WED_RRO_BA_SESSION_STATUS: {
 		struct mt7996_mcu_wed_rro_ba_event *e;
 
