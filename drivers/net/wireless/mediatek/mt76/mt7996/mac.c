@@ -715,11 +715,15 @@ static void
 mt7996_mac_write_txwi_8023(struct mt7996_dev *dev, __le32 *txwi,
 			   struct sk_buff *skb, struct mt76_wcid *wcid)
 {
+	struct ethhdr *eth = (struct ethhdr *)skb->data;
 	u8 tid = skb->priority & IEEE80211_QOS_CTL_TID_MASK;
 	u8 fc_type, fc_stype;
 	u16 ethertype;
+	bool multicast;
 	bool wmm = false;
 	u32 val;
+
+	multicast = is_multicast_ether_addr(eth->h_dest);
 
 	if (wcid->sta) {
 		struct ieee80211_sta *sta = wcid_to_sta(wcid);
@@ -733,6 +737,8 @@ mt7996_mac_write_txwi_8023(struct mt7996_dev *dev, __le32 *txwi,
 	ethertype = get_unaligned_be16(&skb->data[12]);
 	if (ethertype >= ETH_P_802_3_MIN)
 		val |= MT_TXD1_ETH_802_3;
+	if (multicast)
+		val |= MT_TXD1_FIXED_RATE;
 
 	txwi[1] |= cpu_to_le32(val);
 
@@ -744,7 +750,10 @@ mt7996_mac_write_txwi_8023(struct mt7996_dev *dev, __le32 *txwi,
 
 	txwi[2] |= cpu_to_le32(val);
 
-	if (wcid->amsdu)
+	if (multicast)
+		txwi[3] |= cpu_to_le32(MT_TXD3_BCM);
+
+	if (wcid->amsdu && !multicast)
 		txwi[3] |= cpu_to_le32(MT_TXD3_HW_AMSDU);
 }
 
@@ -955,9 +964,17 @@ void mt7996_mac_write_txwi(struct mt7996_dev *dev, __le32 *txwi,
 		mt7996_mac_write_txwi_80211(dev, txwi, skb, key, wcid);
 
 	if (txwi[1] & cpu_to_le32(MT_TXD1_FIXED_RATE)) {
-		bool mcast = ieee80211_is_data(hdr->frame_control) &&
-			     is_multicast_ether_addr(hdr->addr1);
+		bool mcast;
 		u8 idx = MT7996_BASIC_RATES_TBL;
+
+		if (is_8023) {
+			struct ethhdr *eth = (struct ethhdr *)skb->data;
+
+			mcast = is_multicast_ether_addr(eth->h_dest);
+		} else {
+			mcast = ieee80211_is_data(hdr->frame_control) &&
+				is_multicast_ether_addr(hdr->addr1);
+		}
 
 		if (mlink) {
 			if (mcast && mlink->mcast_rates_idx)

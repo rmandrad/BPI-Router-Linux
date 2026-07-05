@@ -572,6 +572,8 @@ static int mt7996_add_interface(struct ieee80211_hw *hw,
 	mt76_vif_init(vif, &mvif->mt76);
 
 	vif->offload_flags |= IEEE80211_OFFLOAD_ENCAP_4ADDR;
+	if (vif->type == NL80211_IFTYPE_AP)
+		vif->offload_flags |= IEEE80211_OFFLOAD_ENCAP_MCAST;
 	mvif->mt76.deflink_id = IEEE80211_LINK_UNSPECIFIED;
 
 out:
