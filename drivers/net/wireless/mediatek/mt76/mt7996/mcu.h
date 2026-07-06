@@ -287,6 +287,15 @@ struct mt7996_mcu_wed_rro_ba_delete_event {
 	u8 __rsv2[2];
 } __packed;
 
+struct mt7996_mcu_ba_trigger {
+	struct mt7996_mcu_rxd rxd;
+
+	u8 wlan_idx_lo;
+	u8 tid;
+	u8 wlan_idx_hi;
+	u8 rsv;
+} __packed;
+
 enum  {
 	UNI_WED_RRO_BA_SESSION_STATUS,
 	UNI_WED_RRO_BA_SESSION_TBL,
@@ -1061,6 +1070,7 @@ enum {
 enum {
 	UNI_CMD_SDO_SET = 1,
 	UNI_CMD_SDO_QUERY,
+	UNI_CMD_SDO_AUTO_BA = 5,
 	UNI_CMD_SDO_CP_MODE = 6,
 };
 

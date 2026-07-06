@@ -814,6 +814,8 @@ static void mt7996_init_work(struct work_struct *work)
 
 	if (!is_mt7990(&dev->mt76))
 		mt7996_mcu_set_dup_wtbl(dev);
+
+	mt7996_mcu_ba_trigger_enable(dev, true);
 }
 
 void mt7996_wfsys_reset(struct mt7996_dev *dev)

@@ -409,6 +409,35 @@ int mt7996_mcu_wa_cmd(struct mt7996_dev *dev, int cmd, u32 a1, u32 a2, u32 a3)
 				 sizeof(req), false);
 }
 
+int mt7996_mcu_ba_trigger_enable(struct mt7996_dev *dev, bool enable)
+{
+#define MT7996_BA_TIMEOUT	1000
+	struct {
+		u8 rsv[4];
+		__le16 tag;
+		__le16 len;
+		struct {
+			u8 enable;
+			u8 target;
+			u8 rsv[2];
+			__le32 timeout;
+		} __packed data;
+	} __packed req = {
+		.tag = cpu_to_le16(UNI_CMD_SDO_AUTO_BA),
+		.len = cpu_to_le16(sizeof(req) - 4),
+		.data.enable = enable,
+		.data.target = 0,
+		.data.timeout = cpu_to_le32(MT7996_BA_TIMEOUT),
+	};
+
+	if (is_mt7990(&dev->mt76))
+		return mt76_mcu_send_msg(&dev->mt76, MCU_WA_UNI_CMD(SDO),
+					 &req, sizeof(req), false);
+
+	return mt76_mcu_send_msg(&dev->mt76, MCU_WA_EXT_CMD(AUTO_BA),
+				 &req.data, sizeof(req.data), true);
+}
+
 struct mt7996_mcu_countdown_data {
 	struct mt76_phy *mphy;
 	u8 omac_idx;
@@ -772,6 +801,15 @@ mt7996_mcu_rx_thermal_notify(struct mt7996_dev *dev, struct sk_buff *skb)
 	phy->throttle_state = n->duty_percent;
 }
 
+static void mt7996_mcu_rx_ba_trigger(struct mt7996_dev *dev, struct sk_buff *skb)
+{
+	struct mt7996_mcu_ba_trigger *event = (void *)skb->data;
+	u16 wlan_idx;
+
+	wlan_idx = ((u16)event->wlan_idx_hi << 8) | event->wlan_idx_lo;
+	mt7996_mac_ba_trigger(dev, wlan_idx, event->tid);
+}
+
 static void
 mt7996_mcu_rx_ext_event(struct mt7996_dev *dev, struct sk_buff *skb)
 {
@@ -780,6 +818,9 @@ mt7996_mcu_rx_ext_event(struct mt7996_dev *dev, struct sk_buff *skb)
 	switch (rxd->ext_eid) {
 	case MCU_EXT_EVENT_FW_LOG_2_HOST:
 		mt7996_mcu_rx_log_message(dev, skb);
+		break;
+	case MCU_EXT_EVENT_BA_TRIGGER:
+		mt7996_mcu_rx_ba_trigger(dev, skb);
 		break;
 	default:
 		break;
@@ -1563,11 +1604,11 @@ int mt7996_mcu_add_tx_ba(struct mt7996_dev *dev,
 {
 	struct ieee80211_sta *sta = params->sta;
 	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
-	struct ieee80211_link_sta *link_sta;
+	unsigned long valid_links = sta->valid_links ?: BIT(0);
 	unsigned int link_id;
 	int ret = 0;
 
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
 		struct mt7996_sta_link *msta_link;
 		struct mt7996_vif_link *link;
 
@@ -1597,11 +1638,11 @@ int mt7996_mcu_add_rx_ba(struct mt7996_dev *dev,
 {
 	struct ieee80211_sta *sta = params->sta;
 	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
-	struct ieee80211_link_sta *link_sta;
+	unsigned long valid_links = sta->valid_links ?: BIT(0);
 	unsigned int link_id;
 	int ret = 0;
 
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_set_bit(link_id, &valid_links, IEEE80211_MLD_MAX_NUM_LINKS) {
 		struct mt7996_sta_link *msta_link;
 		struct mt7996_vif_link *link;
 
@@ -1782,7 +1823,7 @@ mt7996_mcu_sta_amsdu_tlv(struct mt7996_dev *dev, struct sk_buff *skb,
 
 	tlv = mt76_connac_mcu_add_tlv(skb, STA_REC_HW_AMSDU, sizeof(*amsdu));
 	amsdu = (struct sta_rec_amsdu *)tlv;
-	amsdu->max_amsdu_num = 8;
+	amsdu->max_amsdu_num = 31;
 	amsdu->amsdu_en = true;
 	msta_link->wcid.amsdu = true;
 

@@ -74,6 +74,7 @@ mt76_tx_status_unlock(struct mt76_dev *dev, struct sk_buff_head *list)
 			} else {
 				status.n_rates = 0;
 			}
+
 		}
 
 		hw = mt76_tx_status_get_hw(dev, skb);

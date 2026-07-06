@@ -94,6 +94,7 @@
 #define MT7996_EXT_EEPROM_BLOCK_SIZE	1024
 #define MT7996_TOKEN_SIZE		16384
 #define MT7996_HW_TOKEN_SIZE		8192
+#define ADDBA_RETRY_PERIOD		(5 * HZ)
 
 #define MT7996_CFEND_RATE_DEFAULT	0x49	/* OFDM 24M */
 #define MT7996_CFEND_RATE_11B		0x03	/* 11B LP, 11M */
@@ -317,6 +318,7 @@ struct mt7996_sta {
 	u8 seclink_id;
 
 	struct mt7996_vif *vif;
+	unsigned long last_addba_req_time[IEEE80211_NUM_TIDS];
 };
 
 struct mt7996_vif_link {
@@ -780,6 +782,7 @@ int mt7996_mcu_add_tx_ba(struct mt7996_dev *dev,
 int mt7996_mcu_add_rx_ba(struct mt7996_dev *dev,
 			 struct ieee80211_ampdu_params *params,
 			 struct ieee80211_vif *vif, bool enable);
+int mt7996_mcu_ba_trigger_enable(struct mt7996_dev *dev, bool enable);
 int mt7996_mcu_update_bss_color(struct mt7996_dev *dev,
 				struct mt76_vif_link *mlink,
 				struct cfg80211_he_bss_color *he_bss_color);
@@ -947,6 +950,7 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
 void mt7996_mac_add_twt_setup(struct ieee80211_hw *hw,
 			      struct ieee80211_sta *sta,
 			      struct ieee80211_twt_setup *twt);
+void mt7996_mac_ba_trigger(struct mt7996_dev *dev, u16 wlan_idx, u8 tid);
 int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 			  enum mt76_txq_id qid, struct mt76_wcid *wcid,
 			  struct ieee80211_sta *sta,
