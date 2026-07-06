@@ -1099,10 +1099,10 @@ enum mac80211_tx_info_flags {
  *	operation on the interface.
  * @IEEE80211_TX_CTRL_MLO_LINK: If not @IEEE80211_LINK_UNSPECIFIED, this
  *	frame should be transmitted on the specific link. This really is
- *	only relevant for frames that do not have data present, and is
- *	also not used for 802.3 format frames. Note that even if the frame
- *	is on a specific link, address translation might still apply if
- *	it's intended for an MLD.
+ *	only relevant for frames that do not have data present, and for
+ *	802.3 multicast encapsulation offload fanout. Note that even if
+ *	the frame is on a specific link, address translation might still
+ *	apply if it's intended for an MLD.
  *
  * These flags are used in tx_info->control.flags.
  */
