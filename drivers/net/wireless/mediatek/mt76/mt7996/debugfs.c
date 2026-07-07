@@ -87,6 +87,9 @@ mt7996_sys_recovery_set(struct file *file, const char __user *user_buf,
 	 * <band>,7: trigger & enable system error L4 mdp recovery.
 	 * <band>,8: trigger & enable system error full recovery.
 	 * <band>,9: trigger firmware crash.
+	 * 10: trigger grab wa firmware coredump.
+	 * 11: trigger grab wm firmware coredump.
+	 * 12: hw bit detect only.
 	 */
 	case UNI_CMD_SER_QUERY:
 		ret = mt7996_mcu_set_ser(dev, UNI_CMD_SER_QUERY, 0, band);
@@ -118,6 +121,11 @@ mt7996_sys_recovery_set(struct file *file, const char __user *user_buf,
 		if (ret)
 			return ret;
 		break;
+	case UNI_CMD_SER_SET_HW_BIT_DETECT_ONLY:
+		ret = mt7996_mcu_set_ser(dev, UNI_CMD_SER_SET, BIT(0), band);
+		if (ret)
+			return ret;
+		break;
 	default:
 		break;
 	}
@@ -133,7 +141,7 @@ mt7996_sys_recovery_get(struct file *file, char __user *user_buf,
 	char *buff;
 	int desc = 0;
 	ssize_t ret;
-	static const size_t bufsz = 1024;
+	static const size_t bufsz = 1536;
 
 	buff = kmalloc(bufsz, GFP_KERNEL);
 	if (!buff)
@@ -162,7 +170,15 @@ mt7996_sys_recovery_get(struct file *file, char __user *user_buf,
 			  "<band>,8: trigger system error full recovery\n");
 	desc += scnprintf(buff + desc, bufsz - desc,
 			  "<band>,9: trigger firmware crash\n");
-
+	desc += scnprintf(buff + desc, bufsz - desc,
+			  "%2d: trigger grab wa firmware coredump\n",
+			  UNI_CMD_SER_FW_COREDUMP_WA);
+	desc += scnprintf(buff + desc, bufsz - desc,
+			  "%2d: trigger grab wm firmware coredump\n",
+			  UNI_CMD_SER_FW_COREDUMP_WM);
+	desc += scnprintf(buff + desc, bufsz - desc,
+			  "%2d: hw bit detect only\n",
+			  UNI_CMD_SER_SET_HW_BIT_DETECT_ONLY);
 	/* SER statistics */
 	desc += scnprintf(buff + desc, bufsz - desc,
 			  "\nlet's dump firmware SER statistics...\n");
@@ -664,7 +680,7 @@ mt7996_sta_hw_queue_read(void *data, struct ieee80211_sta *sta)
 		if (!mlink)
 			continue;
 
-		msta_link = mt7996_sta_link(msta, link_id);
+		msta_link = rcu_dereference(msta->link[link_id]);
 		if (!msta_link)
 			continue;
 
@@ -870,46 +886,13 @@ mt7996_rf_regval_set(void *data, u64 val)
 DEFINE_DEBUGFS_ATTRIBUTE(fops_rf_regval, mt7996_rf_regval_get,
 			 mt7996_rf_regval_set, "0x%08llx\n");
 
-static int mt7996_vow_atf_set(void *data, u64 val)
-{
-	struct mt7996_dev *dev = data;
-	struct mt7996_phy *phy;
-	int ret;
-
-	dev->vow_atf_en = !!val;
-
-	mt7996_for_each_phy(dev, phy) {
-		ret = mt7996_mcu_set_vow_drr_ctrl(dev, phy->mt76->band_idx, NULL,
-						  NULL,
-						  VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND, 0);
-		if (ret)
-			return ret;
-
-		ret = mt7996_mcu_set_vow_feature_ctrl(phy);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
-static int mt7996_vow_atf_get(void *data, u64 *val)
-{
-	struct mt7996_dev *dev = data;
-
-	*val = dev->vow_atf_en;
-
-	return 0;
-}
-
-DEFINE_DEBUGFS_ATTRIBUTE(fops_vow_atf, mt7996_vow_atf_get, mt7996_vow_atf_set,
-			 "%lld\n");
-
 int mt7996_init_debugfs(struct mt7996_dev *dev)
 {
 	struct dentry *dir;
 
 	dir = mt76_register_debugfs_fops(&dev->mphy, NULL);
+	if (!dir)
+		return -ENOMEM;
 
 	debugfs_create_file("hw-queues", 0400, dir, dev,
 			    &mt7996_hw_queues_fops);
@@ -929,7 +912,6 @@ int mt7996_init_debugfs(struct mt7996_dev *dev)
 	debugfs_create_devm_seqfile(dev->mt76.dev, "twt_stats", dir,
 				    mt7996_twt_stats);
 	debugfs_create_file("rf_regval", 0600, dir, dev, &fops_rf_regval);
-	debugfs_create_file("vow_atf", 0600, dir, dev, &fops_vow_atf);
 
 	debugfs_create_u32("dfs_hw_pattern", 0400, dir, &dev->hw_pattern);
 	debugfs_create_file("radar_trigger", 0200, dir, dev,
@@ -1076,7 +1058,7 @@ static ssize_t mt7996_link_sta_fixed_rate_set(struct file *file,
 
 	mutex_lock(&dev->mt76.mutex);
 
-	msta_link = mt7996_sta_link_protected(dev, msta, link_sta->link_id);
+	msta_link = mt76_dereference(msta->link[link_sta->link_id], &dev->mt76);
 	if (!msta_link) {
 		ret = -EINVAL;
 		goto out;

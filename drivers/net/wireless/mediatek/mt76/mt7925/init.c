@@ -117,15 +117,6 @@ static int __mt7925_init_hardware(struct mt792x_dev *dev)
 	if (ret)
 		goto out;
 
-	if (is_mt7927(&dev->mt76)) {
-		ret = mt7925_mcu_set_dbdc(&dev->mphy, true);
-		if (ret) {
-			dev_warn(dev->mt76.dev,
-				 "MT7927 DBDC enable failed: %d\n", ret);
-			ret = 0;
-		}
-	}
-
 out:
 	return ret;
 }
@@ -241,8 +232,7 @@ int mt7925_register_device(struct mt792x_dev *dev)
 	dev->pm.idle_timeout = MT792x_PM_TIMEOUT;
 	dev->pm.stats.last_wake_event = jiffies;
 	dev->pm.stats.last_doze_event = jiffies;
-	/* MT7927: runtime PM crashes BT firmware on the shared CONNINFRA domain */
-	if (!mt76_is_usb(&dev->mt76) && !is_mt7927(&dev->mt76)) {
+	if (!mt76_is_usb(&dev->mt76)) {
 		dev->pm.enable_user = true;
 		dev->pm.enable = true;
 		dev->pm.ds_enable_user = true;
@@ -286,7 +276,7 @@ int mt7925_register_device(struct mt792x_dev *dev)
 	dev->mphy.hw->wiphy->available_antennas_rx = dev->mphy.chainmask;
 	dev->mphy.hw->wiphy->available_antennas_tx = dev->mphy.chainmask;
 
-	queue_work(system_wq, &dev->init_work);
+	queue_work(system_percpu_wq, &dev->init_work);
 
 	return 0;
 }

@@ -874,7 +874,8 @@ static inline bool drv_tx_frames_pending(struct ieee80211_local *local)
 
 static inline int drv_set_bitrate_mask(struct ieee80211_local *local,
 				       struct ieee80211_sub_if_data *sdata,
-				       const struct cfg80211_bitrate_mask *mask)
+				       const struct cfg80211_bitrate_mask *mask,
+				       unsigned int link_id)
 {
 	int ret = -EOPNOTSUPP;
 
@@ -884,10 +885,33 @@ static inline int drv_set_bitrate_mask(struct ieee80211_local *local,
 	if (!check_sdata_in_driver(sdata))
 		return -EIO;
 
-	trace_drv_set_bitrate_mask(local, sdata, mask);
+	trace_drv_set_bitrate_mask(local, sdata, mask, link_id);
 	if (local->ops->set_bitrate_mask)
 		ret = local->ops->set_bitrate_mask(&local->hw,
-						   &sdata->vif, mask);
+						   &sdata->vif, mask, link_id);
+	trace_drv_return_int(local, ret);
+
+	return ret;
+}
+
+static inline int drv_set_qos_map(struct ieee80211_local *local,
+				  struct ieee80211_sub_if_data *sdata)
+{
+	struct mac80211_qos_map *qos_map;
+	int ret = 0;
+
+	might_sleep();
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	if (!check_sdata_in_driver(sdata))
+		return -EIO;
+
+	qos_map = sdata_dereference(sdata->qos_map, sdata);
+
+	trace_drv_set_qos_map(local, sdata);
+	if (local->ops->set_qos_map)
+		ret = local->ops->set_qos_map(&local->hw, &sdata->vif,
+					      qos_map ? &qos_map->qos_map : NULL);
 	trace_drv_return_int(local, ret);
 
 	return ret;

@@ -21,17 +21,13 @@ struct mt76_worker
 enum {
 	MT76_WORKER_SCHEDULED,
 	MT76_WORKER_RUNNING,
+	MT76_WORKER_DISABLED,
 };
 
 #define MT76_INCR(_var, _size) \
 	(_var = (((_var) + 1) % (_size)))
 
-int __mt76_wcid_alloc(u32 *mask, int min, int size);
-
-static inline int mt76_wcid_alloc(u32 *mask, int size)
-{
-       return __mt76_wcid_alloc(mask, 0, size);
-}
+int mt76_wcid_alloc(u32 *mask, int size);
 
 static inline void
 mt76_wcid_mask_set(u32 *mask, int idx)
@@ -95,8 +91,11 @@ static inline void mt76_worker_disable(struct mt76_worker *w)
 	if (!w->task)
 		return;
 
+	if (test_and_set_bit(MT76_WORKER_DISABLED, &w->state))
+		return;
+
 	kthread_park(w->task);
-	WRITE_ONCE(w->state, 0);
+	WRITE_ONCE(w->state, BIT(MT76_WORKER_DISABLED));
 }
 
 static inline void mt76_worker_enable(struct mt76_worker *w)
@@ -105,6 +104,7 @@ static inline void mt76_worker_enable(struct mt76_worker *w)
 		return;
 
 	kthread_unpark(w->task);
+	clear_bit(MT76_WORKER_DISABLED, &w->state);
 	mt76_worker_schedule(w);
 }
 

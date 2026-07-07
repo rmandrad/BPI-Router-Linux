@@ -4903,7 +4903,10 @@ struct ieee80211_ops {
 			      u32 *tx, u32 *tx_max, u32 *rx, u32 *rx_max);
 	bool (*tx_frames_pending)(struct ieee80211_hw *hw);
 	int (*set_bitrate_mask)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
-				const struct cfg80211_bitrate_mask *mask);
+				const struct cfg80211_bitrate_mask *mask,
+				unsigned int link_id);
+	int (*set_qos_map)(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
+			   struct cfg80211_qos_map *qos_map);
 	void (*event_callback)(struct ieee80211_hw *hw,
 			       struct ieee80211_vif *vif,
 			       const struct ieee80211_event *event);
@@ -6837,6 +6840,8 @@ void ieee80211_sta_register_airtime(struct ieee80211_sta *pubsta, u8 tid,
  */
 bool
 ieee80211_txq_airtime_check(struct ieee80211_hw *hw, struct ieee80211_txq *txq);
+u32 ieee80211_txq_aql_pending(struct ieee80211_hw *hw,
+			      struct ieee80211_txq *txq);
 
 /**
  * ieee80211_iter_keys - iterate keys programmed into the device

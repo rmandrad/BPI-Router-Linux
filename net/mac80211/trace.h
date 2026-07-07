@@ -1474,13 +1474,15 @@ DEFINE_EVENT(local_only_evt, drv_offchannel_tx_cancel_wait,
 TRACE_EVENT(drv_set_bitrate_mask,
 	TP_PROTO(struct ieee80211_local *local,
 		 struct ieee80211_sub_if_data *sdata,
-		 const struct cfg80211_bitrate_mask *mask),
+		 const struct cfg80211_bitrate_mask *mask,
+		 unsigned int link_id),
 
-	TP_ARGS(local, sdata, mask),
+	TP_ARGS(local, sdata, mask, link_id),
 
 	TP_STRUCT__entry(
 		LOCAL_ENTRY
 		VIF_ENTRY
+		__field(u32, link_id)
 		__field(u32, legacy_2g)
 		__field(u32, legacy_5g)
 	),
@@ -1488,14 +1490,22 @@ TRACE_EVENT(drv_set_bitrate_mask,
 	TP_fast_assign(
 		LOCAL_ASSIGN;
 		VIF_ASSIGN;
+		__entry->link_id = link_id;
 		__entry->legacy_2g = mask->control[NL80211_BAND_2GHZ].legacy;
 		__entry->legacy_5g = mask->control[NL80211_BAND_5GHZ].legacy;
 	),
 
 	TP_printk(
-		LOCAL_PR_FMT  VIF_PR_FMT " 2G Mask:0x%x 5G Mask:0x%x",
-		LOCAL_PR_ARG, VIF_PR_ARG, __entry->legacy_2g, __entry->legacy_5g
+		LOCAL_PR_FMT  VIF_PR_FMT " link:%d 2G Mask:0x%x 5G Mask:0x%x",
+		LOCAL_PR_ARG, VIF_PR_ARG, __entry->link_id,
+		__entry->legacy_2g, __entry->legacy_5g
 	)
+);
+
+DEFINE_EVENT(local_sdata_evt, drv_set_qos_map,
+	TP_PROTO(struct ieee80211_local *local,
+		 struct ieee80211_sub_if_data *sdata),
+	TP_ARGS(local, sdata)
 );
 
 TRACE_EVENT(drv_set_rekey_data,

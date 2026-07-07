@@ -8446,7 +8446,8 @@ static void ath10k_mac_clr_bitrate_mask_iter(void *data,
 
 static int ath10k_mac_op_set_bitrate_mask(struct ieee80211_hw *hw,
 					  struct ieee80211_vif *vif,
-					  const struct cfg80211_bitrate_mask *mask)
+					  const struct cfg80211_bitrate_mask *mask,
+					  unsigned int link_id)
 {
 	struct ath10k_vif *arvif = (void *)vif->drv_priv;
 	struct cfg80211_chan_def def;

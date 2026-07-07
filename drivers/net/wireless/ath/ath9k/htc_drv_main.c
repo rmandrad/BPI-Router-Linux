@@ -1764,7 +1764,8 @@ static void ath9k_htc_set_coverage_class(struct ieee80211_hw *hw,
  */
 static int ath9k_htc_set_bitrate_mask(struct ieee80211_hw *hw,
 				      struct ieee80211_vif *vif,
-				      const struct cfg80211_bitrate_mask *mask)
+				      const struct cfg80211_bitrate_mask *mask,
+				      unsigned int link_id)
 {
 	struct ath9k_htc_priv *priv = hw->priv;
 	struct ath_common *common = ath9k_hw_common(priv->ah);

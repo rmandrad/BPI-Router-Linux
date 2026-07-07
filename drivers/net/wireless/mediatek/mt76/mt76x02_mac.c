@@ -865,6 +865,7 @@ int mt76x02_mac_process_rx(struct mt76x02_dev *dev, struct sk_buff *skb,
 	}
 	status->freq = dev->mphy.chandef.chan->center_freq;
 	status->band = dev->mphy.chandef.chan->band;
+	status->wcid_idx = status->wcid ? status->wcid->idx : 0;
 
 	hdr = (struct ieee80211_hdr *)skb->data;
 	status->qos_ctl = *ieee80211_get_qos_ctl(hdr);

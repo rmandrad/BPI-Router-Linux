@@ -11,20 +11,20 @@ int mt7996_init_tx_queues(struct mt7996_phy *phy, int idx, int n_desc,
 			  int ring_base, struct mtk_wed_device *wed)
 {
 	struct mt7996_dev *dev = phy->dev;
-	u32 flags = 0;
+	u32 flags = MT_QFLAG_CHECK_DDONE;
 
 	if (mtk_wed_device_active(wed)) {
 		ring_base += MT_TXQ_ID(0) * MT_RING_SIZE;
 		idx -= MT_TXQ_ID(0);
 
 		if (wed == &dev->mt76.mmio.wed_hif2)
-			flags = MT_WED_Q_TX(0);
+			flags |= MT_WED_Q_TX(0);
 		else
-			flags = MT_WED_Q_TX(idx);
+			flags |= MT_WED_Q_TX(idx);
 	}
 
 	if (mt76_npu_device_active(&dev->mt76))
-		flags = MT_NPU_Q_TX(phy->mt76->band_idx);
+		flags |= MT_NPU_Q_TX(phy->mt76->band_idx);
 
 	return mt76_connac_init_tx_queues(phy->mt76, idx, n_desc,
 					  ring_base, wed, flags);
@@ -889,10 +889,12 @@ int mt7996_dma_init(struct mt7996_dev *dev)
 		} else {
 			if (mtk_wed_device_active(wed)) {
 				/* tx free notify event from WA for band0 */
-				dev->mt76.q_rx[MT_RXQ_TXFREE_BAND0].flags = MT_WED_Q_TXFREE;
+				dev->mt76.q_rx[MT_RXQ_TXFREE_BAND0].flags =
+					MT_WED_Q_TXFREE;
 				dev->mt76.q_rx[MT_RXQ_TXFREE_BAND0].wed = wed;
 			} else if (mt76_npu_device_active(&dev->mt76)) {
-				dev->mt76.q_rx[MT_RXQ_TXFREE_BAND0].flags = MT_NPU_Q_TXFREE(0);
+				dev->mt76.q_rx[MT_RXQ_TXFREE_BAND0].flags =
+					MT_NPU_Q_TXFREE(0);
 			}
 
 			ret = mt76_queue_alloc(dev,

@@ -9099,7 +9099,8 @@ out:
 static int
 ath11k_mac_op_set_bitrate_mask(struct ieee80211_hw *hw,
 			       struct ieee80211_vif *vif,
-			       const struct cfg80211_bitrate_mask *mask)
+			       const struct cfg80211_bitrate_mask *mask,
+			       unsigned int link_id)
 {
 	struct ath11k_vif *arvif = ath11k_vif_to_arvif(vif);
 	struct cfg80211_chan_def def;

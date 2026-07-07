@@ -134,16 +134,6 @@ struct mt7915_twt_flow {
 
 DECLARE_EWMA(avg_signal, 10, 8)
 
-#define UMAC_BWC_GROUP_MIN	40
-
-enum vow_drr_ctrl_id {
-	VOW_DRR_CTRL_STA_ALL = 0x00,
-	VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND = 0x10,
-	VOW_DRR_CTRL_AIRTIME_QUANTUM_ALL = 0x28,
-	VOW_DRR_CTRL_STA_PAUSE = 0x30,
-};
-
-
 struct mt7915_sta {
 	struct mt76_wcid wcid; /* must be first */
 
@@ -333,8 +323,6 @@ struct mt7915_dev {
 		u8 n_agrt;
 	} twt;
 
-	bool vow_atf_en;
-
 	struct reset_control *rstc;
 	void __iomem *dcm;
 	void __iomem *sku;
@@ -473,16 +461,8 @@ int mt7915_mcu_add_dev_info(struct mt7915_phy *phy,
 			    struct ieee80211_vif *vif, bool enable);
 int mt7915_mcu_add_bss_info(struct mt7915_phy *phy,
 			    struct ieee80211_vif *vif, int enable);
-int __mt7915_mcu_add_sta(struct mt7915_dev *dev, struct ieee80211_vif *vif,
-			 struct ieee80211_sta *sta, struct mt76_wcid *wcid,
-			 int conn_state, bool newly);
-static inline int
-mt7915_mcu_add_sta(struct mt7915_dev *dev, struct ieee80211_vif *vif,
-		   struct ieee80211_sta *sta, int conn_state, bool newly)
-{
-	return __mt7915_mcu_add_sta(dev, vif, sta, NULL, conn_state, newly);
-}
-
+int mt7915_mcu_add_sta(struct mt7915_dev *dev, struct ieee80211_vif *vif,
+		       struct ieee80211_sta *sta, int conn_state, bool newly);
 int mt7915_mcu_add_tx_ba(struct mt7915_dev *dev,
 			 struct ieee80211_ampdu_params *params,
 			 bool add);
@@ -500,8 +480,7 @@ int mt7915_mcu_set_protection(struct mt7915_phy *phy, struct ieee80211_vif *vif,
 int mt7915_mcu_add_obss_spr(struct mt7915_phy *phy, struct ieee80211_vif *vif,
 			    struct ieee80211_he_obss_pd *he_obss_pd);
 int mt7915_mcu_add_rate_ctrl(struct mt7915_dev *dev, struct ieee80211_vif *vif,
-			     struct ieee80211_sta *sta, struct mt76_wcid *wcid,
-			     bool changed);
+			     struct ieee80211_sta *sta, bool changed);
 int mt7915_mcu_add_smps(struct mt7915_dev *dev, struct ieee80211_vif *vif,
 			struct ieee80211_sta *sta);
 int mt7915_set_channel(struct mt76_phy *mphy);
@@ -511,7 +490,6 @@ int mt7915_mcu_update_edca(struct mt7915_dev *dev, void *req);
 int mt7915_mcu_set_fixed_rate_ctrl(struct mt7915_dev *dev,
 				   struct ieee80211_vif *vif,
 				   struct ieee80211_sta *sta,
-				   struct mt76_wcid *wcid,
 				   void *data, u32 field);
 int mt7915_mcu_set_eeprom(struct mt7915_dev *dev);
 int mt7915_mcu_get_eeprom(struct mt7915_dev *dev, u32 offset, u8 *read_buf);
@@ -521,12 +499,6 @@ int mt7915_mcu_set_mac(struct mt7915_dev *dev, int band, bool enable,
 int mt7915_mcu_set_test_param(struct mt7915_dev *dev, u8 param, bool test_mode,
 			      u8 en);
 int mt7915_mcu_set_ser(struct mt7915_dev *dev, u8 action, u8 set, u8 band);
-int mt7915_mcu_set_vow_drr_ctrl(struct mt7915_dev *dev, struct mt7915_sta *msta,
-				enum vow_drr_ctrl_id id, u16 weight);
-int mt7915_mcu_set_vow_feature_ctrl(struct mt7915_dev *dev);
-int mt7915_mcu_set_vow_band(struct mt7915_dev *dev, struct mt7915_vif *mvif);
-void mt7915_vow_init(struct mt7915_dev *dev);
-u8 mt7915_vow_sta_bss_grp(struct mt76_vif_link *mvif);
 int mt7915_mcu_set_sku_en(struct mt7915_phy *phy);
 int mt7915_mcu_set_txpower_sku(struct mt7915_phy *phy);
 int mt7915_mcu_get_txpower_sku(struct mt7915_phy *phy, s8 *txpower, int len,

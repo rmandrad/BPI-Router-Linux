@@ -786,7 +786,8 @@ static void rtw_ra_mask_info_update(struct rtw_dev *rtwdev,
 
 static int rtw_ops_set_bitrate_mask(struct ieee80211_hw *hw,
 				    struct ieee80211_vif *vif,
-				    const struct cfg80211_bitrate_mask *mask)
+				    const struct cfg80211_bitrate_mask *mask,
+				    unsigned int link_id)
 {
 	struct rtw_dev *rtwdev = hw->priv;
 

@@ -1246,7 +1246,8 @@ static int rsi_mac80211_set_rts_threshold(struct ieee80211_hw *hw,
  */
 static int rsi_mac80211_set_rate_mask(struct ieee80211_hw *hw,
 				      struct ieee80211_vif *vif,
-				      const struct cfg80211_bitrate_mask *mask)
+				      const struct cfg80211_bitrate_mask *mask,
+				      unsigned int link_id)
 {
 	const unsigned int mcs_offset = ARRAY_SIZE(rsi_rates);
 	struct rsi_hw *adapter = hw->priv;

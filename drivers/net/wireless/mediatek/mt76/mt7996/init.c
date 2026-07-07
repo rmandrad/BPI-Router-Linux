@@ -78,6 +78,7 @@ static const struct ieee80211_iface_combination if_comb = {
 static const u8 if_types_ext_capa_ap[] = {
 	[0] = WLAN_EXT_CAPA1_EXT_CHANNEL_SWITCHING,
 	[2] = WLAN_EXT_CAPA3_MULTI_BSSID_SUPPORT,
+	[6] = WLAN_EXT_CAPA7_SCS_SUPPORT,
 	[7] = WLAN_EXT_CAPA8_OPMODE_NOTIF,
 };
 
@@ -374,7 +375,6 @@ static void __mt7996_init_txpower(struct mt7996_phy *phy,
 		target_power = DIV_ROUND_UP(target_power, 2);
 		chan->max_power = min_t(int, chan->max_reg_power,
 					target_power);
-		phy->txpower = max(phy->txpower, chan->max_power);
 		chan->orig_mpwr = target_power;
 	}
 }
@@ -471,18 +471,6 @@ mt7996_init_wiphy_band(struct ieee80211_hw *hw, struct mt7996_phy *phy)
 	mt7996_set_stream_vht_txbf_caps(phy);
 	mt7996_set_stream_he_eht_caps(phy);
 	mt7996_init_txpower(phy);
-
-	/* Register a LED classdev for every band, not just the primary one.
-	 * Under single-wiphy MLO the 5/6 GHz bands are brought up through
-	 * mt7996_register_phy(); without these callbacks mt76_led_init() skips
-	 * them and only the 2.4 GHz LED is exposed. The hardware TX-blink path
-	 * is already indexed by band_idx, so per-band blink works once the
-	 * classdev exists.
-	 */
-	if (IS_ENABLED(CONFIG_MT76_LEDS)) {
-		phy->mt76->leds.cdev.brightness_set = mt7996_led_set_brightness;
-		phy->mt76->leds.cdev.blink_set = mt7996_led_set_blink;
-	}
 }
 
 static void
@@ -535,6 +523,8 @@ mt7996_init_wiphy(struct ieee80211_hw *hw, struct mtk_wed_device *wed)
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_ACK_SIGNAL_SUPPORT);
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_CAN_REPLACE_PTK0);
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_MU_MIMO_AIR_SNIFFER);
+	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_SET_SCAN_DWELL);
+	mt7996_vendor_register(&dev->phy);
 
 	if (mt7996_eeprom_has_background_radar(dev) &&
 	    (!mdev->dev->of_node ||
@@ -551,7 +541,6 @@ mt7996_init_wiphy(struct ieee80211_hw *hw, struct mtk_wed_device *wed)
 	ieee80211_hw_set(hw, CHANCTX_STA_CSA);
 
 	hw->max_tx_fragments = 4;
-	wiphy->txq_memory_limit = 32 << 20; /* 32 MiB */
 
 	/* init led callbacks */
 	if (IS_ENABLED(CONFIG_MT76_LEDS)) {
@@ -621,7 +610,6 @@ static void mt7996_mac_init_basic_rates(struct mt7996_dev *dev)
 void mt7996_mac_init(struct mt7996_dev *dev)
 {
 #define HIF_TXD_V2_1	0x21
-	struct mt7996_phy *phy;
 	int i, rx_path_type;
 
 	mt76_clear(dev, MT_MDP_DCR2, MT_MDP_DCR2_RX_TRANS_SHORT);
@@ -668,9 +656,6 @@ void mt7996_mac_init(struct mt7996_dev *dev)
 	for (i = MT_BAND0; i <= MT_BAND2; i++)
 		mt7996_mac_init_band(dev, i);
 
-	mt7996_for_each_phy(dev, phy)
-		mt7996_vow_init(phy);
-
 	mt7996_mac_init_basic_rates(dev);
 }
 
@@ -692,17 +677,6 @@ int mt7996_txbf_init(struct mt7996_dev *dev)
 
 	/* enable eBF */
 	return mt7996_mcu_set_txbf(dev, BF_HW_EN_UPDATE);
-}
-
-void mt7996_vow_init(struct mt7996_phy *phy)
-{
-	phy->dev->vow_atf_en = true;
-
-	mt7996_mcu_set_vow_drr_ctrl(phy->dev, phy->mt76->band_idx, NULL, NULL,
-				    VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND, 0);
-	mt7996_mcu_set_vow_drr_ctrl(phy->dev, phy->mt76->band_idx, NULL, NULL,
-				    VOW_DRR_CTRL_AIRTIME_QUANTUM_ALL, 0);
-	mt7996_mcu_set_vow_feature_ctrl(phy);
 }
 
 static int mt7996_register_phy(struct mt7996_dev *dev, enum mt76_band_id band)
@@ -811,10 +785,6 @@ static void mt7996_init_work(struct work_struct *work)
 	mt7996_mcu_set_eeprom(dev);
 	mt7996_mac_init(dev);
 	mt7996_txbf_init(dev);
-
-	if (!is_mt7990(&dev->mt76))
-		mt7996_mcu_set_dup_wtbl(dev);
-
 	mt7996_mcu_ba_trigger_enable(dev, true);
 }
 
@@ -1020,8 +990,8 @@ static int mt7996_wed_rro_init(struct mt7996_dev *dev)
 		if (is_mt7996(&dev->mt76) &&
 		    mt76_npu_device_active(&dev->mt76))
 			mt76_npu_send_txrx_addr(&dev->mt76, 0, i,
-					dev->wed_rro.addr_elem[i].phy_addr,
-					0, 0);
+						dev->wed_rro.addr_elem[i].phy_addr,
+						0, 0);
 
 #ifdef CONFIG_NET_MEDIATEK_SOC_WED
 		if (mtk_wed_device_active(&dev->mt76.mmio.wed) &&
@@ -1202,6 +1172,21 @@ reset:
 		}
 reset_session:
 		mt7996_mcu_wed_rro_reset_sessions(dev, e->id);
+
+		if (is_mt7996(&dev->mt76)) {
+			struct ieee80211_sta *sta;
+			struct mt7996_sta *msta;
+			struct mt76_wcid *wcid;
+
+			rcu_read_lock();
+			wcid = mt76_wcid_ptr(dev, e->wcid);
+			sta = wcid_to_sta(wcid);
+			if (sta) {
+				msta = (struct mt7996_sta *)sta->drv_priv;
+				msta->stop_rx_ba_in_progress = false;
+			}
+			rcu_read_unlock();
+		}
 out:
 		kfree(e);
 	}
@@ -1225,7 +1210,7 @@ static int mt7996_variant_type_init(struct mt7996_dev *dev)
 		else if (u32_get_bits(val, MT_PAD_GPIO_ADIE_COMB_7992))
 			var_type = MT7992_VAR_TYPE_44;
 		else
-			var_type = MT7992_VAR_TYPE_24;
+			return -EINVAL;
 		break;
 	case MT7990_DEVICE_ID:
 		var_type = MT7990_VAR_TYPE_23;
@@ -1235,6 +1220,10 @@ static int mt7996_variant_type_init(struct mt7996_dev *dev)
 	}
 
 	dev->var.type = var_type;
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: variant type init chip=0x%x pad_gpio=0x%08x type=%u\n",
+		 mt76_chip(&dev->mt76), val, dev->var.type);
+
 	return 0;
 }
 
@@ -1259,8 +1248,7 @@ static int mt7996_variant_fem_init(struct mt7996_dev *dev)
 	if (ret)
 		return ret;
 
-	ret = mt7996_mcu_get_eeprom(dev, MT7976C_EFUSE_OFFSET, buf, sizeof(buf),
-				    EEPROM_MODE_EFUSE);
+	ret = mt7996_mcu_get_eeprom(dev, MT7976C_EFUSE_OFFSET, buf, sizeof(buf));
 	if (ret && ret != -EINVAL)
 		return ret;
 
@@ -1277,6 +1265,11 @@ static int mt7996_variant_fem_init(struct mt7996_dev *dev)
 		dev->var.fem = MT7996_FEM_MIX;
 	else
 		dev->var.fem = MT7996_FEM_EXT;
+
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: variant fem init chip=0x%x pad_gpio=0x%08x adie_idx=%u adie_comb=%u adie_id=0x%04x adie_ver=0x%04x efuse_7976c=0x%02x is_7976c=%d fem=%u\n",
+		 mt76_chip(&dev->mt76), val, adie_idx, adie_comb, adie_id,
+		 adie_ver, buf[idx], is_7976c, dev->var.fem);
 
 	return 0;
 }
@@ -1589,7 +1582,6 @@ mt7996_init_eht_caps(struct mt7996_phy *phy, enum nl80211_band band,
 	struct ieee80211_sta_eht_cap *eht_cap = &data->eht_cap;
 	struct ieee80211_eht_cap_elem_fixed *eht_cap_elem = &eht_cap->eht_cap_elem;
 	struct ieee80211_eht_mcs_nss_supp *eht_nss = &eht_cap->eht_mcs_nss_supp;
-	enum nl80211_chan_width width = phy->mt76->chandef.width;
 	int nss = hweight8(phy->mt76->antenna_mask);
 	int sts = hweight16(phy->mt76->chainmask);
 	u8 val;
@@ -1603,6 +1595,10 @@ mt7996_init_eht_caps(struct mt7996_phy *phy, enum nl80211_band band,
 		IEEE80211_EHT_MAC_CAP0_OM_CONTROL |
 		u8_encode_bits(IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_11454,
 			       IEEE80211_EHT_MAC_CAP0_MAX_MPDU_LEN_MASK);
+
+	if (iftype == NL80211_IFTYPE_AP)
+		eht_cap_elem->mac_cap_info[0] |=
+			IEEE80211_EHT_MAC_CAP0_SCS_TRAFFIC_DESC;
 
 	eht_cap_elem->mac_cap_info[1] |=
 		IEEE80211_EHT_MAC_CAP1_MAX_AMPDU_LEN_MASK;
@@ -1665,11 +1661,16 @@ mt7996_init_eht_caps(struct mt7996_phy *phy, enum nl80211_band band,
 		u8_encode_bits(u8_get_bits(1, GENMASK(1, 0)),
 			       IEEE80211_EHT_PHY_CAP5_MAX_NUM_SUPP_EHT_LTF_MASK);
 
-	val = width == NL80211_CHAN_WIDTH_320 ? 0xf :
-	      width == NL80211_CHAN_WIDTH_160 ? 0x7 :
-	      width == NL80211_CHAN_WIDTH_80 ? 0x3 : 0x1;
-	eht_cap_elem->phy_cap_info[6] =
-		u8_encode_bits(val, IEEE80211_EHT_PHY_CAP6_MCS15_SUPP_MASK);
+	eht_cap_elem->phy_cap_info[6] = IEEE80211_EHT_PHY_CAP6_MCS15_SUPP_MASK;
+	if (band != NL80211_BAND_6GHZ) {
+		eht_cap_elem->phy_cap_info[6] &=
+			~IEEE80211_EHT_PHY_CAP6_MCS15_SUPP_320MHZ;
+
+		if (band != NL80211_BAND_5GHZ)
+			eht_cap_elem->phy_cap_info[6] &=
+				~(IEEE80211_EHT_PHY_CAP6_MCS15_SUPP_160MHZ |
+				  IEEE80211_EHT_PHY_CAP6_MCS15_SUPP_80MHZ);
+	}
 
 	val = u8_encode_bits(nss, IEEE80211_EHT_MCS_NSS_RX) |
 	      u8_encode_bits(nss, IEEE80211_EHT_MCS_NSS_TX);
@@ -1767,6 +1768,7 @@ int mt7996_register_device(struct mt7996_dev *dev)
 	dev->mt76.phy.priv = &dev->phy;
 	INIT_WORK(&dev->rc_work, mt7996_mac_sta_rc_work);
 	INIT_DELAYED_WORK(&dev->mphy.mac_work, mt7996_mac_work);
+	INIT_DELAYED_WORK(&dev->scs_work, mt7996_mcu_scs_sta_poll);
 	INIT_LIST_HEAD(&dev->sta_rc_list);
 	INIT_LIST_HEAD(&dev->twt_list);
 

@@ -134,8 +134,10 @@ int mt76_assign_vif_chanctx(struct ieee80211_hw *hw,
 	}
 
 	mlink->ctx = conf;
+	mvif->band_to_link[phy->band_idx] = link_id;
 	ret = dev->drv->vif_link_add(phy, vif, link_conf, mlink);
 	if (ret) {
+		mvif->band_to_link[phy->band_idx] = IEEE80211_LINK_UNSPECIFIED;
 		if (mlink_alloc)
 			kfree(mlink);
 		goto out;
@@ -176,6 +178,7 @@ void mt76_unassign_vif_chanctx(struct ieee80211_hw *hw,
 
 	dev->drv->vif_link_remove(phy, vif, link_conf, mlink);
 	mlink->ctx = NULL;
+	mlink->mvif->band_to_link[phy->band_idx] = IEEE80211_LINK_UNSPECIFIED;
 out:
 	mutex_unlock(&dev->mutex);
 }
@@ -322,7 +325,7 @@ void mt76_roc_complete(struct mt76_phy *phy)
 		mlink->mvif->roc_phy = NULL;
 	if (phy->chanctx && phy->main_chandef.chan && phy->offchannel &&
 	    !test_bit(MT76_MCU_RESET, &dev->phy.state)) {
-		__mt76_set_channel(phy, &phy->main_chandef, false);
+		mt76_set_channel(phy, &phy->main_chandef, false);
 		mt76_offchannel_notify(phy, false);
 	}
 	mt76_put_vif_phy_link(phy, phy->roc_vif, phy->roc_link);
@@ -392,14 +395,7 @@ int mt76_remain_on_channel(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	offchannel = mt76_offchannel_chandef(phy, chan, &chandef);
 	if (offchannel)
 		mt76_offchannel_notify(phy, true);
-	ret = __mt76_set_channel(phy, &chandef, offchannel);
-	if (ret) {
-		mlink->mvif->roc_phy = NULL;
-		phy->roc_vif = NULL;
-		phy->roc_link = NULL;
-		mt76_put_vif_phy_link(phy, vif, mlink);
-		goto out;
-	}
+	mt76_set_channel(phy, &chandef, offchannel);
 	ieee80211_ready_on_channel(hw);
 	ieee80211_queue_delayed_work(phy->hw, &phy->roc_work,
 				     msecs_to_jiffies(duration));

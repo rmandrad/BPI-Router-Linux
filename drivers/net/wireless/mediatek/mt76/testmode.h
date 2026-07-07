@@ -7,6 +7,8 @@
 
 #define MT76_TM_TIMEOUT	10
 
+#include <net/netlink.h>
+
 /**
  * enum mt76_testmode_attr - testmode attributes inside NL80211_ATTR_TESTDATA
  *
@@ -192,5 +194,7 @@ enum mt76_testmode_tx_mode {
 	NUM_MT76_TM_TX_MODES,
 	MT76_TM_TX_MODE_MAX = NUM_MT76_TM_TX_MODES - 1,
 };
+
+extern const struct nla_policy mt76_tm_policy[NUM_MT76_TM_ATTRS];
 
 #endif

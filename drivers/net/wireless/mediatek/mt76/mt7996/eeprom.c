@@ -33,8 +33,6 @@ static char *mt7996_eeprom_name(struct mt7996_dev *dev)
 			if (dev->var.fem == MT7996_FEM_INT)
 				return MT7992_EEPROM_DEFAULT_23_INT;
 			return MT7992_EEPROM_DEFAULT_23;
-		case MT7992_VAR_TYPE_24:
-			return MT7992_EEPROM_DEFAULT_24;
 		case MT7992_VAR_TYPE_44:
 		default:
 			if (dev->var.fem == MT7996_FEM_INT)
@@ -95,6 +93,36 @@ mt7996_eeprom_parse_stream(const u8 *eeprom, u8 band_idx, u8 *path,
 	}
 }
 
+static void
+mt7996_eeprom_fixup_tx_power(struct mt7996_dev *dev, const u8 *def)
+{
+	u8 *eeprom = dev->mt76.eeprom.data;
+	int i;
+	bool zeros_detected = false;
+
+	if (!eeprom[MT_EE_TX0_POWER_2G]) {
+		eeprom[MT_EE_TX0_POWER_2G] = def[MT_EE_TX0_POWER_2G];
+		zeros_detected = true;
+	}
+
+	for (i = MT_EE_TX0_POWER_5G; i < MT_EE_TX0_POWER_5G + 5; ++i) {
+		if (!eeprom[i]) {
+			eeprom[i] = def[i];
+			zeros_detected = true;
+		}
+	}
+
+	for (i = MT_EE_TX0_POWER_6G; i < MT_EE_TX0_POWER_6G + 8; ++i) {
+		if (!eeprom[i]) {
+			eeprom[i] = def[i];
+			zeros_detected = true;
+		}
+	}
+
+	if (zeros_detected)
+		dev_warn(dev->mt76.dev, "eeprom tx_power zeros detected, using defaults\n");
+}
+
 static bool mt7996_eeprom_variant_valid(struct mt7996_dev *dev, const u8 *def)
 {
 #define FEM_INT	0
@@ -138,9 +166,17 @@ mt7996_eeprom_check_or_use_default(struct mt7996_dev *dev, bool use_default)
 {
 	u8 *eeprom = dev->mt76.eeprom.data;
 	const struct firmware *fw = NULL;
+	bool valid = false;
+	char *name;
 	int ret;
 
-	ret = request_firmware(&fw, mt7996_eeprom_name(dev), dev->mt76.dev);
+	name = mt7996_eeprom_name(dev);
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: eeprom default candidate=%s use_default=%d chip=0x%x var_type=%u fem=%u flash_mode=%d\n",
+		 name, use_default, mt76_chip(&dev->mt76), dev->var.type,
+		 dev->var.fem, dev->flash_mode);
+
+	ret = request_firmware(&fw, name, dev->mt76.dev);
 	if (ret)
 		return ret;
 
@@ -150,12 +186,34 @@ mt7996_eeprom_check_or_use_default(struct mt7996_dev *dev, bool use_default)
 		goto out;
 	}
 
-	if (!use_default && mt7996_eeprom_variant_valid(dev, fw->data))
+	mt7996_eeprom_fixup_tx_power(dev, fw->data);
+
+	if (!use_default)
+		valid = mt7996_eeprom_variant_valid(dev, fw->data);
+
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: eeprom loaded chip=0x%04x version=0x%04x wifi_conf=%*ph txpwr_2g=0x%02x txpwr_5g=%*ph txpwr_6g=%*ph variant_valid=%d use_default=%d\n",
+		 get_unaligned_le16(eeprom + MT_EE_CHIP_ID),
+		 get_unaligned_le16(eeprom + MT_EE_VERSION),
+		 8, eeprom + MT_EE_WIFI_CONF, eeprom[MT_EE_TX0_POWER_2G],
+		 5, eeprom + MT_EE_TX0_POWER_5G,
+		 8, eeprom + MT_EE_TX0_POWER_6G,
+		 valid, use_default);
+
+	if (!use_default && valid)
 		goto out;
 
 	dev_warn(dev->mt76.dev, "eeprom load fail, use default bin\n");
 	memcpy(eeprom, fw->data, MT7996_EEPROM_SIZE);
-	dev->eeprom_mode = EEPROM_MODE_DEFAULT_BIN;
+	dev->flash_mode = true;
+
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: eeprom default applied chip=0x%04x version=0x%04x wifi_conf=%*ph txpwr_2g=0x%02x txpwr_5g=%*ph txpwr_6g=%*ph\n",
+		 get_unaligned_le16(eeprom + MT_EE_CHIP_ID),
+		 get_unaligned_le16(eeprom + MT_EE_VERSION),
+		 8, eeprom + MT_EE_WIFI_CONF, eeprom[MT_EE_TX0_POWER_2G],
+		 5, eeprom + MT_EE_TX0_POWER_5G,
+		 8, eeprom + MT_EE_TX0_POWER_6G);
 
 out:
 	release_firmware(fw);
@@ -165,31 +223,26 @@ out:
 
 static int mt7996_eeprom_load(struct mt7996_dev *dev)
 {
-	u32 eeprom_blk_size, block_num;
 	bool use_default = false;
-	int ret, i;
+	int ret;
 
 	ret = mt76_eeprom_init(&dev->mt76, MT7996_EEPROM_SIZE);
 	if (ret < 0)
 		return ret;
 
 	if (ret && !mt7996_check_eeprom(dev)) {
-		dev->eeprom_mode = EEPROM_MODE_FLASH;
+		dev->flash_mode = true;
 		goto out;
 	}
 
-	memset(dev->mt76.eeprom.data, 0, MT7996_EEPROM_SIZE);
-	if (mt7996_has_ext_eeprom(dev)) {
-		/* external eeprom mode */
-		dev->eeprom_mode = EEPROM_MODE_EXT;
-		eeprom_blk_size = MT7996_EXT_EEPROM_BLOCK_SIZE;
-	} else {
+	if (!dev->flash_mode) {
+		u32 eeprom_blk_size = MT7996_EEPROM_BLOCK_SIZE;
+		u32 block_num = DIV_ROUND_UP(MT7996_EEPROM_SIZE, eeprom_blk_size);
 		u8 free_block_num;
+		int i;
 
-		/* efuse mode */
-		dev->eeprom_mode = EEPROM_MODE_EFUSE;
-		eeprom_blk_size = MT7996_EEPROM_BLOCK_SIZE;
-		ret = mt7996_mcu_get_efuse_free_block(dev, &free_block_num);
+		memset(dev->mt76.eeprom.data, 0, MT7996_EEPROM_SIZE);
+		ret = mt7996_mcu_get_eeprom_free_block(dev, &free_block_num);
 		if (ret < 0)
 			return ret;
 
@@ -198,28 +251,26 @@ static int mt7996_eeprom_load(struct mt7996_dev *dev)
 			use_default = true;
 			goto out;
 		}
-	}
 
-	/* check if eeprom data from fw is valid */
-	if (mt7996_mcu_get_eeprom(dev, 0, NULL, eeprom_blk_size,
-				  dev->eeprom_mode) ||
-	    mt7996_check_eeprom(dev)) {
-		use_default = true;
-		goto out;
-	}
-
-	/* read eeprom data from fw */
-	block_num = DIV_ROUND_UP(MT7996_EEPROM_SIZE, eeprom_blk_size);
-	for (i = 1; i < block_num; i++) {
-		u32 len = eeprom_blk_size;
-
-		if (i == block_num - 1)
-			len = MT7996_EEPROM_SIZE % eeprom_blk_size;
-		ret = mt7996_mcu_get_eeprom(dev, i * eeprom_blk_size,
-					    NULL, len, dev->eeprom_mode);
-		if (ret && ret != -EINVAL) {
+		/* check if eeprom data from fw is valid */
+		if (mt7996_mcu_get_eeprom(dev, 0, NULL, 0) ||
+		    mt7996_check_eeprom(dev)) {
 			use_default = true;
 			goto out;
+		}
+
+		/* read eeprom data from fw */
+		for (i = 1; i < block_num; i++) {
+			u32 len = eeprom_blk_size;
+
+			if (i == block_num - 1)
+				len = MT7996_EEPROM_SIZE % eeprom_blk_size;
+			ret = mt7996_mcu_get_eeprom(dev, i * eeprom_blk_size,
+						    NULL, len);
+			if (ret && ret != -EINVAL) {
+				use_default = true;
+				goto out;
+			}
 		}
 	}
 
@@ -296,13 +347,17 @@ static int mt7996_eeprom_parse_band_config(struct mt7996_phy *phy)
 
 int mt7996_eeprom_parse_hw_cap(struct mt7996_dev *dev, struct mt7996_phy *phy)
 {
-	u8 path, rx_path, nss, band_idx = phy->mt76->band_idx;
+	u8 path, rx_path, nss, raw_path, raw_rx_path, raw_nss;
+	u8 band_idx = phy->mt76->band_idx;
 	u8 *eeprom = dev->mt76.eeprom.data;
 	struct mt76_phy *mphy = phy->mt76;
 	int max_path = 5, max_nss = 4;
 	int ret;
 
 	mt7996_eeprom_parse_stream(eeprom, band_idx, &path, &rx_path, &nss);
+	raw_path = path;
+	raw_rx_path = rx_path;
+	raw_nss = nss;
 	ret = mt7996_eeprom_parse_efuse_hw_cap(phy, &path, &rx_path, &nss);
 	if (ret)
 		return ret;
@@ -326,6 +381,13 @@ int mt7996_eeprom_parse_hw_cap(struct mt7996_dev *dev, struct mt7996_phy *phy)
 	if (band_idx < MT_BAND2)
 		dev->chainshift[band_idx + 1] = dev->chainshift[band_idx] +
 						hweight16(mphy->chainmask);
+
+	dev_info(dev->mt76.dev,
+		 "mt7996-debug: eeprom hwcap band_idx=%u raw_path=%u raw_rx_path=%u raw_nss=%u final_path=%u final_rx_path=%u final_nss=%u chainmask=0x%x antenna_mask=0x%x has_aux_rx=%d chainshift_next=%u has_2g=%d has_5g=%d has_6g=%d\n",
+		 band_idx, raw_path, raw_rx_path, raw_nss, path, rx_path, nss,
+		 mphy->chainmask, mphy->antenna_mask, phy->has_aux_rx,
+		 band_idx < MT_BAND2 ? dev->chainshift[band_idx + 1] : 0,
+		 mphy->cap.has_2ghz, mphy->cap.has_5ghz, mphy->cap.has_6ghz);
 
 	return mt7996_eeprom_parse_band_config(phy);
 }
@@ -394,8 +456,7 @@ bool mt7996_eeprom_has_background_radar(struct mt7996_dev *dev)
 			return false;
 		break;
 	case MT7992_DEVICE_ID:
-		if (dev->var.type == MT7992_VAR_TYPE_23 ||
-		    dev->var.type == MT7992_VAR_TYPE_24)
+		if (dev->var.type == MT7992_VAR_TYPE_23)
 			return false;
 		break;
 	case MT7990_DEVICE_ID: {

@@ -108,7 +108,7 @@ static struct sk_buff *mt76_npu_dequeue(struct mt76_dev *dev,
 	}
 	q->tail = index;
 	q->queued -= i;
-	Q_WRITE(q, dma_idx, q->tail);
+	Q_WRITE(q, dma_idx, q->tail, MT_QUEUE_DMA_IDX);
 
 	return skb;
 }
@@ -304,15 +304,22 @@ static int mt76_npu_setup_tc_block_cb(enum tc_setup_type type,
 				      void *type_data, void *cb_priv)
 {
 	struct mt76_phy *phy = cb_priv;
+	struct mt76_dev *dev = phy->dev;
+	struct airoha_ppe_dev *ppe_dev;
+	int err = -EOPNOTSUPP;
 
 	if (type != TC_SETUP_CLSFLOWER)
 		return -EOPNOTSUPP;
 
-	if (!mt76_ppe_device_active(phy->dev))
-		return -EOPNOTSUPP;
+	mutex_lock(&dev->mutex);
 
-	return airoha_ppe_dev_setup_tc_block_cb(phy->dev->mmio.ppe_dev,
-						type_data);
+	ppe_dev = rcu_dereference_protected(dev->mmio.ppe_dev, &dev->mutex);
+	if (ppe_dev)
+		err = airoha_ppe_dev_setup_tc_block_cb(ppe_dev, type_data);
+
+	mutex_unlock(&dev->mutex);
+
+	return err;
 }
 
 static int mt76_npu_setup_tc_block(struct mt76_phy *phy,
@@ -405,8 +412,8 @@ int mt76_npu_send_txrx_addr(struct mt76_dev *dev, int ifindex,
 	npu = rcu_dereference(dev->mmio.npu);
 	if (npu)
 		err = airoha_npu_wlan_send_msg(npu, ifindex,
-				WLAN_FUNC_SET_WAIT_INODE_TXRX_REG_ADDR,
-				&info, sizeof(info), GFP_ATOMIC);
+					       WLAN_FUNC_SET_WAIT_INODE_TXRX_REG_ADDR,
+					       &info, sizeof(info), GFP_ATOMIC);
 	rcu_read_unlock();
 
 	return err;

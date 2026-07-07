@@ -74,7 +74,6 @@ mt76_tx_status_unlock(struct mt76_dev *dev, struct sk_buff_head *list)
 			} else {
 				status.n_rates = 0;
 			}
-
 		}
 
 		hw = mt76_tx_status_get_hw(dev, skb);
@@ -228,9 +227,7 @@ mt76_tx_check_non_aql(struct mt76_dev *dev, struct mt76_wcid *wcid,
 		      struct sk_buff *skb)
 {
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
-	struct ieee80211_sta *sta;
 	int pending;
-	int i;
 
 	if (!wcid || info->tx_time_est)
 		return;
@@ -238,17 +235,6 @@ mt76_tx_check_non_aql(struct mt76_dev *dev, struct mt76_wcid *wcid,
 	pending = atomic_dec_return(&wcid->non_aql_packets);
 	if (pending < 0)
 		atomic_cmpxchg(&wcid->non_aql_packets, pending, 0);
-
-	sta = wcid_to_sta(wcid);
-	if (!sta || pending != MT_MAX_NON_AQL_PKT - 1)
-		return;
-
-	for (i = 0; i < ARRAY_SIZE(sta->txq); i++) {
-		if (!sta->txq[i])
-			continue;
-
-		ieee80211_schedule_txq(dev->hw, sta->txq[i]);
-	}
 }
 
 void __mt76_tx_complete_skb(struct mt76_dev *dev, u16 wcid_idx, struct sk_buff *skb,
@@ -338,10 +324,6 @@ __mt76_tx_queue_skb(struct mt76_phy *phy, int qid, struct sk_buff *skb,
 	non_aql = !info->tx_time_est;
 	idx = dev->queue_ops->tx_queue_skb(phy, q, qid, skb, wcid, sta);
 	if (idx < 0 || !sta)
-		return idx;
-
-	wcid = (struct mt76_wcid *)sta->drv_priv;
-	if (!wcid->sta)
 		return idx;
 
 	q->entry[idx].wcid = wcid->idx;
@@ -496,15 +478,15 @@ mt76_txq_send_burst(struct mt76_phy *phy, struct mt76_queue *q,
 	bool stop = false;
 	int idx;
 
+	if (atomic_read(&wcid->non_aql_packets) >= MT_MAX_NON_AQL_PKT)
+		return 0;
+
 	if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
 		if (!(dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING))
 			return 0;
-		if (!ieee80211_txq_airtime_check(phy->hw, txq))
+		if (ieee80211_txq_aql_pending(phy->hw, txq))
 			return 0;
 	}
-
-	if (atomic_read(&wcid->non_aql_packets) >= MT_MAX_NON_AQL_PKT)
-		return 0;
 
 	skb = mt76_txq_dequeue(phy, mtxq);
 	if (!skb)
@@ -584,7 +566,6 @@ mt76_txq_schedule_list(struct mt76_phy *phy, enum mt76_txq_id qid)
 			continue;
 
 		q = phy->q_tx[qid];
-
 		if (test_bit(MT_WCID_FLAG_PS, &wcid->flags)) {
 			if (!(dev->drv->drv_flags & MT_DRV_HW_PS_BUFFERING))
 				continue;
@@ -592,21 +573,10 @@ mt76_txq_schedule_list(struct mt76_phy *phy, enum mt76_txq_id qid)
 			if (!mt76_txq_stopped(q))
 				n_frames = mt76_txq_send_burst(phy, q, mtxq, wcid);
 
+			ieee80211_return_txq(phy->hw, txq, false);
+
 			if (unlikely(n_frames < 0))
 				return n_frames;
-
-			/*
-			 * Keep the station in the airtime scheduler only while it
-			 * makes progress or the shared queue is stopped. A PS
-			 * station that cannot be drained consumes no airtime, so
-			 * its DRR deficit never goes negative and returning it here
-			 * would pin it at the head of the device-wide active_txqs
-			 * list, starving all other stations on every band. Leave it
-			 * unscheduled instead and let mt76_tx_complete_skb() re-arm
-			 * it once a buffered frame completes.
-			 */
-			if (n_frames > 0 || mt76_txq_stopped(q))
-				ieee80211_return_txq(phy->hw, txq, false);
 
 			ret += n_frames;
 			continue;
@@ -614,6 +584,7 @@ mt76_txq_schedule_list(struct mt76_phy *phy, enum mt76_txq_id qid)
 
 		if (atomic_read(&wcid->non_aql_packets) >= MT_MAX_NON_AQL_PKT)
 			continue;
+
 		if (dev->queue_ops->tx_cleanup &&
 		    q->queued + 2 * MT_TXQ_FREE_THR >= q->ndesc) {
 			dev->queue_ops->tx_cleanup(dev, q, false);
@@ -1011,7 +982,7 @@ mt76_token_release(struct mt76_dev *dev, int token, bool *wake)
 #endif
 	}
 
-	if (wake && dev->token_count < dev->token_size - MT76_TOKEN_FREE_THR &&
+	if (dev->token_count < dev->token_size - MT76_TOKEN_FREE_THR &&
 	    dev->phy.q_tx[0]->blocked)
 		*wake = true;
 
@@ -1033,3 +1004,16 @@ mt76_rx_token_release(struct mt76_dev *dev, int token)
 	return t;
 }
 EXPORT_SYMBOL_GPL(mt76_rx_token_release);
+
+struct mt76_txwi_cache *
+mt76_rx_token_find(struct mt76_dev *dev, int token)
+{
+	struct mt76_txwi_cache *t;
+
+	spin_lock_bh(&dev->rx_token_lock);
+	t = idr_find(&dev->rx_token, token);
+	spin_unlock_bh(&dev->rx_token_lock);
+
+	return t;
+}
+EXPORT_SYMBOL_GPL(mt76_rx_token_find);

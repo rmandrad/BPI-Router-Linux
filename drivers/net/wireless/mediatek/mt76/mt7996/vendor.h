@@ -1,0 +1,29 @@
+/* SPDX-License-Identifier: ISC */
+/* Copyright (C) 2026 MediaTek Inc. */
+
+#ifndef __MT7996_VENDOR_H
+#define __MT7996_VENDOR_H
+
+#define MTK_NL80211_VENDOR_ID	0x0ce7
+
+enum mtk_nl80211_vendor_subcmds {
+	MTK_NL80211_VENDOR_SUBCMD_SCS_CTRL = 0xd0,
+};
+
+enum mtk_vendor_attr_scs_ctrl {
+	MTK_VENDOR_ATTR_SCS_CTRL_UNSPEC,
+
+	MTK_VENDOR_ATTR_SCS_ID,
+	MTK_VENDOR_ATTR_SCS_REQ_TYPE,
+	MTK_VENDOR_ATTR_SCS_DIR,
+	MTK_VENDOR_ATTR_SCS_QOS_IE,
+	MTK_VENDOR_ATTR_SCS_MAC_ADDR,
+	MTK_VENDOR_ATTR_SCS_LINK_ID,
+
+	/* keep last */
+	NUM_MTK_VENDOR_ATTRS_SCS_CTRL,
+	MTK_VENDOR_ATTR_SCS_CTRL_MAX =
+		NUM_MTK_VENDOR_ATTRS_SCS_CTRL - 1
+};
+
+#endif

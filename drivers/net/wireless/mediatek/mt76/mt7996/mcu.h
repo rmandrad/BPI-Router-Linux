@@ -52,10 +52,12 @@ struct mt7996_mcu_thermal_enable {
 	u8 rsv[2];
 } __packed;
 
-struct mt7996_mcu_countdown_notify {
+struct mt7996_mcu_csa_notify {
+	struct mt7996_mcu_rxd rxd;
+
 	u8 omac_idx;
-	u8 count;
-	u8 csa_failure_reason; /* 0: success, 1: beacon disabled */
+	u8 csa_count;
+	u8 band_idx;
 	u8 rsv;
 } __packed;
 
@@ -145,7 +147,7 @@ struct mt7996_mcu_background_chain_ctrl {
 	u8 rsv[2];
 } __packed;
 
-struct mt7996_mcu_eeprom_update {
+struct mt7996_mcu_eeprom {
 	u8 _rsv[4];
 
 	__le16 tag;
@@ -153,43 +155,6 @@ struct mt7996_mcu_eeprom_update {
 	u8 buffer_mode;
 	u8 format;
 	__le16 buf_len;
-} __packed;
-
-union eeprom_data {
-	struct {
-		__le32 data_len;
-		DECLARE_FLEX_ARRAY(u8, data);
-	} ext_eeprom;
-	DECLARE_FLEX_ARRAY(u8, efuse);
-} __packed;
-
-struct mt7996_mcu_eeprom_info {
-	u8 _rsv[4];
-
-	__le16 tag;
-	__le16 len;
-	__le32 addr;
-	__le32 valid;
-} __packed;
-
-struct mt7996_mcu_eeprom_access {
-	struct mt7996_mcu_eeprom_info info;
-	union eeprom_data eeprom;
-} __packed;
-
-struct mt7996_mcu_eeprom_access_event {
-	u8 _rsv[4];
-
-	__le16 tag;
-	__le16 len;
-	__le32 version;
-	__le32 addr;
-	__le32 valid;
-	__le32 size;
-	__le32 magic_no;
-	__le32 type;
-	__le32 rsv[4];
-	union eeprom_data eeprom;
 } __packed;
 
 struct mt7996_mcu_phy_rx_info {
@@ -284,12 +249,13 @@ struct mt7996_mcu_wed_rro_ba_delete_event {
 	__le16 len;
 
 	__le16 session_id;
-	u8 __rsv2[2];
+	__le16 mld_id;
+	u8 tid;
+	u8 __rsv[3];
 } __packed;
 
 struct mt7996_mcu_ba_trigger {
 	struct mt7996_mcu_rxd rxd;
-
 	u8 wlan_idx_lo;
 	u8 tid;
 	u8 wlan_idx_hi;
@@ -300,39 +266,6 @@ enum  {
 	UNI_WED_RRO_BA_SESSION_STATUS,
 	UNI_WED_RRO_BA_SESSION_TBL,
 	UNI_WED_RRO_BA_SESSION_DELETE,
-};
-
-struct mt7996_mcu_ps_sync_event {
-	struct mt7996_mcu_rxd rxd;
-
-	u8 bss_idx;
-	u8 __rsv[3];
-} __packed;
-
-struct mt7996_mcu_ps_client_info {
-	__le16 tag;
-	__le16 len;
-	u8 ps_bit;
-	u8 __rsv;
-	__le16 wlan_idx;
-	u8 buffer_size;
-	u8 __rsv2[3];
-} __packed;
-
-struct mt7996_mcu_ps_multi_client_info {
-	__le16 tag;
-	__le16 len;
-	__le16 sta_cnt;
-	__le16 sta_ps_info[];
-} __packed;
-
-#define MT7996_PS_MULTI_WCID	GENMASK(10, 0)
-#define MT7996_PS_MULTI_PS_BIT	BIT(15)
-
-enum {
-	UNI_PS_CLIENT_INFO = 0,
-	UNI_PS_MULTI_CLIENT_INFO = 1,
-	UNI_PS_MULTI_CLIENT_INFO_BITMAP = 2,
 };
 
 struct mt7996_mcu_thermal_notify {
@@ -401,6 +334,39 @@ enum {
 	MCU_WA_PARAM_CPU_UTIL = 0x0b,
 	MCU_WA_PARAM_RED = 0x0e,
 	MCU_WA_PARAM_HW_PATH_HIF_VER = 0x2f,
+};
+
+struct mt7996_mcu_ps_sync_event {
+	struct mt7996_mcu_rxd rxd;
+
+	u8 bss_idx;
+	u8 __rsv[3];
+} __packed;
+
+struct mt7996_mcu_ps_client_info {
+	__le16 tag;
+	__le16 len;
+	u8 ps_bit;
+	u8 __rsv;
+	__le16 wlan_idx;
+	u8 buffer_size;
+	u8 __rsv2[3];
+} __packed;
+
+struct mt7996_mcu_ps_multi_client_info {
+	__le16 tag;
+	__le16 len;
+	__le16 sta_cnt;
+	__le16 sta_ps_info[];
+} __packed;
+
+#define MT7996_PS_MULTI_WCID	GENMASK(10, 0)
+#define MT7996_PS_MULTI_PS_BIT	BIT(15)
+
+enum {
+	UNI_PS_CLIENT_INFO = 0,
+	UNI_PS_MULTI_CLIENT_INFO = 1,
+	UNI_PS_MULTI_CLIENT_INFO_BITMAP = 2,
 };
 
 enum mcu_mmps_mode {
@@ -491,16 +457,7 @@ struct bss_bcn_cntdwn_tlv {
 	__le16 tag;
 	__le16 len;
 	u8 cnt;
-	union {
-		struct {
-			bool static_pp;
-			bool abort;
-		} csa;
-		struct {
-			bool abort;
-		} cca;
-	};
-	u8 rsv;
+	u8 rsv[3];
 } __packed;
 
 struct bss_bcn_mbss_tlv {
@@ -598,6 +555,13 @@ struct sta_rec_ba_uni {
 	__le16 winsize;
 	u8 ba_rdd_rro;
 	u8 __rsv[3];
+} __packed;
+
+struct sta_rec_tx_cap {
+	__le16 tag;
+	__le16 len;
+	u8 ampdu_limit_en;
+	u8 rsv[3];
 } __packed;
 
 struct sta_rec_eht {
@@ -720,6 +684,12 @@ struct sta_rec_hdr_trans {
 	u8 to_ds;
 	u8 dis_rx_hdr_tran;
 	u8 mesh;
+} __packed;
+
+struct sta_rec_ps_leave {
+	__le16 tag;
+	__le16 len;
+	u8 __rsv[4];
 } __packed;
 
 struct sta_rec_mld_setup {
@@ -917,11 +887,6 @@ enum {
 	UNI_CHANNEL_RX_PATH,
 };
 
-enum {
-	UNI_CHIP_CONFIG_NIC_CAPA = 3,
-	UNI_CHIP_CONFIG_DUP_WTBL = 4,
-};
-
 #define MT7996_BSS_UPDATE_MAX_SIZE	(sizeof(struct bss_req_hdr) +		\
 					 sizeof(struct mt76_connac_bss_basic_tlv) +	\
 					 sizeof(struct bss_rlm_tlv) +		\
@@ -940,6 +905,7 @@ enum {
 					 sizeof(struct sta_rec_ht_uni) +	\
 					 sizeof(struct sta_rec_he_v2) +		\
 					 sizeof(struct sta_rec_ba_uni) +	\
+					 sizeof(struct sta_rec_tx_cap) +	\
 					 sizeof(struct sta_rec_vht) +		\
 					 sizeof(struct sta_rec_uapsd) + 	\
 					 sizeof(struct sta_rec_amsdu) +		\
@@ -989,18 +955,17 @@ enum {
 };
 
 enum {
-	UNI_EXT_EEPROM_ACCESS = 1,
-};
-
-enum {
 	UNI_VOW_DRR_CTRL,
-	UNI_VOW_FEATURE_CTRL,
 	UNI_VOW_RX_AT_AIRTIME_EN = 0x0b,
 	UNI_VOW_RX_AT_AIRTIME_CLR_EN = 0x0e,
 };
 
 enum {
 	UNI_CMD_MIB_DATA,
+};
+
+enum {
+	UNI_CMD_MURU_SET_QOS_CFG = 0xfe,
 };
 
 enum {
@@ -1034,6 +999,12 @@ enum{
 };
 
 enum {
+	UNI_CMD_SCS_SEND_DATA,
+	UNI_CMD_SCS_SET_PD_THR_RANGE = 2,
+	UNI_CMD_SCS_ENABLE,
+};
+
+enum {
 	UNI_CMD_THERMAL_PROTECT_ENABLE = 0x6,
 	UNI_CMD_THERMAL_PROTECT_DISABLE,
 	UNI_CMD_THERMAL_PROTECT_DUTY_CONFIG,
@@ -1061,6 +1032,11 @@ enum {
 	UNI_CMD_SER_SET_RECOVER_FROM_ETH,
 	UNI_CMD_SER_SET_RECOVER_FULL = 8,
 	UNI_CMD_SER_SET_SYSTEM_ASSERT,
+	/* coredump */
+	UNI_CMD_SER_FW_COREDUMP_WA,
+	UNI_CMD_SER_FW_COREDUMP_WM,
+	/* hw bit detect only */
+	UNI_CMD_SER_SET_HW_BIT_DETECT_ONLY,
 	/* action */
 	UNI_CMD_SER_ENABLE = 1,
 	UNI_CMD_SER_SET,
@@ -1070,8 +1046,14 @@ enum {
 enum {
 	UNI_CMD_SDO_SET = 1,
 	UNI_CMD_SDO_QUERY,
-	UNI_CMD_SDO_AUTO_BA = 5,
+	UNI_CMD_SDO_AUTO_BA,
 	UNI_CMD_SDO_CP_MODE = 6,
+};
+
+enum {
+	SCS_REQ_TYPE_ADD,
+	SCS_REQ_TYPE_REMOVE,
+	SCS_REQ_TYPE_CHANGE,
 };
 
 enum {

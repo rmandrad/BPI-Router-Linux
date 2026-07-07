@@ -11,6 +11,7 @@
 
 #define MT_DMA_CTL_SD_LEN1		GENMASK(13, 0)
 #define MT_DMA_CTL_LAST_SEC1		BIT(14)
+#define MT_DMA_CTL_BURST		BIT(15)
 #define MT_DMA_CTL_M_DONE		BIT(15)
 #define MT_DMA_CTL_SD_LEN0		GENMASK(29, 16)
 #define MT_DMA_CTL_LAST_SEC0		BIT(30)
@@ -48,20 +49,22 @@
 
 #if IS_ENABLED(CONFIG_NET_MEDIATEK_SOC_WED)
 
-#define Q_READ(_q, _field) ({						\
+#define Q_READ(_q, _field, _mask) ({					\
 	u32 _offset = offsetof(struct mt76_queue_regs, _field);		\
 	u32 _val;							\
 	if ((_q)->flags & MT_QFLAG_WED)					\
 		_val = mtk_wed_device_reg_read((_q)->wed,		\
 					       ((_q)->wed_regs +	\
-						_offset));		\
+					        _offset));		\
 	else								\
 		_val = readl(&(_q)->regs->_field);			\
-	_val;								\
+	_mask ? FIELD_GET(_mask, _val) : _val;				\
 })
 
-#define Q_WRITE(_q, _field, _val)	do {				\
+#define Q_WRITE(_q, _field, _v, _mask)	do {				\
 	u32 _offset = offsetof(struct mt76_queue_regs, _field);		\
+	u32 _val = (Q_READ(_q, _field, 0) & ~_mask) |			\
+		   FIELD_PREP(_mask, _v);				\
 	if ((_q)->flags & MT_QFLAG_WED)					\
 		mtk_wed_device_reg_write((_q)->wed,			\
 					 ((_q)->wed_regs + _offset),	\
@@ -72,14 +75,14 @@
 
 #elif IS_ENABLED(CONFIG_MT76_NPU)
 
-#define Q_READ(_q, _field) ({						\
+#define Q_READ(_q, _field, _mask) ({					\
 	u32 _offset = offsetof(struct mt76_queue_regs, _field);		\
 	u32 _val = 0;							\
 	if ((_q)->flags & MT_QFLAG_NPU) {				\
 		struct airoha_npu *npu;					\
 									\
 		rcu_read_lock();					\
-		npu = rcu_dereference(q->dev->mmio.npu);		\
+		npu = rcu_dereference((_q)->dev->mmio.npu);		\
 		if (npu)						\
 			regmap_read(npu->regmap,			\
 				    ((_q)->wed_regs + _offset), &_val);	\
@@ -87,16 +90,18 @@
 	} else {							\
 		_val = readl(&(_q)->regs->_field);			\
 	}								\
-	_val;								\
+	_mask ? FIELD_GET(_mask, _val) : _val;				\
 })
 
-#define Q_WRITE(_q, _field, _val)	do {				\
+#define Q_WRITE(_q, _field, _v, _mask)	do {				\
 	u32 _offset = offsetof(struct mt76_queue_regs, _field);		\
+	u32 _val = (Q_READ(_q, _field, 0) & ~_mask) |			\
+		   FIELD_PREP(_mask, _v);				\
 	if ((_q)->flags & MT_QFLAG_NPU) {				\
 		struct airoha_npu *npu;					\
 									\
 		rcu_read_lock();					\
-		npu = rcu_dereference(q->dev->mmio.npu);		\
+		npu = rcu_dereference((_q)->dev->mmio.npu);		\
 		if (npu)						\
 			regmap_write(npu->regmap,			\
 				     ((_q)->wed_regs + _offset), _val);	\
@@ -108,8 +113,12 @@
 
 #else
 
-#define Q_READ(_q, _field)		readl(&(_q)->regs->_field)
-#define Q_WRITE(_q, _field, _val)	writel(_val, &(_q)->regs->_field)
+#define Q_READ(_q, _field, _mask)					\
+	_mask ? FIELD_GET(_mask, readl(&(_q)->regs->_field)) :		\
+		readl(&(_q)->regs->_field)
+#define Q_WRITE(_q, _field, _v, _mask)					\
+	writel(((Q_READ(_q, _field, 0) & ~_mask) |			\
+	       FIELD_PREP(_mask, _v)), &(_q)->regs->_field)
 
 #endif
 

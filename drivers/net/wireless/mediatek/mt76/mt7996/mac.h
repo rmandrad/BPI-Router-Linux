@@ -37,6 +37,11 @@ struct mt7996_dfs_pattern {
 	u32 min_stgpr_diff;
 } __packed;
 
+struct mt7996_dfs_radar_spec {
+	struct mt7996_dfs_pulse pulse_th;
+	struct mt7996_dfs_pattern radar_pattern[16];
+};
+
 #define MT7996_SDO_EVENT_COUNT			GENMASK(26, 20)
 #define MT7996_SDO_EVENT_DW_LEN			GENMASK(31, 27)
 #define MT7996_SDO_EVENT_ID			GENMASK(26, 21)

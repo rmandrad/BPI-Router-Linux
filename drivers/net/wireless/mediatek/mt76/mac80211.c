@@ -224,28 +224,15 @@ static int mt76_led_init(struct mt76_phy *phy)
 		of_node_put(np);
 	}
 
-	if (hw->wiphy->n_radio > 1)
-		snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s-%u",
-			 wiphy_name(hw->wiphy), phy->band_idx);
-	else
-		snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s",
-			 wiphy_name(hw->wiphy));
+	snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s",
+		 wiphy_name(hw->wiphy));
 
 	phy->leds.cdev.name = phy->leds.name;
-
-	/* The throughput trigger is created once per ieee80211_hw. Under
-	 * single-wiphy MLO every band registers its own LED classdev for the
-	 * same hw and the bands can come up in any order, so create the trigger
-	 * on the first call, stash it on the primary phy and let the other bands
-	 * reuse it; calling it again would trip a WARN_ON().
-	 */
-	if (!dev->phy.leds.cdev.default_trigger)
-		dev->phy.leds.cdev.default_trigger =
-			ieee80211_create_tpt_led_trigger(hw,
-							 IEEE80211_TPT_LEDTRIG_FL_RADIO,
-							 mt76_tpt_blink,
-							 ARRAY_SIZE(mt76_tpt_blink));
-	phy->leds.cdev.default_trigger = dev->phy.leds.cdev.default_trigger;
+	phy->leds.cdev.default_trigger =
+		ieee80211_create_tpt_led_trigger(hw,
+					IEEE80211_TPT_LEDTRIG_FL_RADIO,
+					mt76_tpt_blink,
+					ARRAY_SIZE(mt76_tpt_blink));
 
 	dev_info(dev->dev,
 		"registering led '%s'\n", phy->leds.name);
@@ -462,8 +449,6 @@ mt76_phy_init(struct mt76_phy *phy, struct ieee80211_hw *hw)
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_AIRTIME_FAIRNESS);
 	wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_AQL);
 
-	if (!wiphy->max_remain_on_channel_duration)
-		wiphy->max_remain_on_channel_duration = 5000;
 	if (!wiphy->available_antennas_tx)
 		wiphy->available_antennas_tx = phy->antenna_mask;
 	if (!wiphy->available_antennas_rx)
@@ -1073,7 +1058,8 @@ int __mt76_set_channel(struct mt76_phy *phy, struct cfg80211_chan_def *chandef,
 	if (!offchannel)
 		phy->main_chandef = *chandef;
 
-	if (chandef->chan != phy->main_chandef.chan)
+	if (chandef->chan != phy->main_chandef.chan ||
+	    test_bit(MT76_SCANNING, &phy->state))
 		memset(phy->chan_state, 0, sizeof(*phy->chan_state));
 
 	ret = dev->drv->set_channel(phy);
@@ -1099,6 +1085,7 @@ int mt76_set_channel(struct mt76_phy *phy, struct cfg80211_chan_def *chandef,
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(mt76_set_channel);
 
 int mt76_update_channel(struct mt76_phy *phy)
 {
@@ -1263,6 +1250,7 @@ mt76_rx_convert(struct mt76_dev *dev, struct sk_buff *skb,
 	struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
 	struct ieee80211_hdr *hdr = mt76_skb_get_hdr(skb);
 	struct mt76_rx_status mstat;
+	struct mt76_wcid *wcid;
 
 	mstat = *((struct mt76_rx_status *)skb->cb);
 	memset(status, 0, sizeof(*status));
@@ -1304,20 +1292,21 @@ mt76_rx_convert(struct mt76_dev *dev, struct sk_buff *skb,
 	memcpy(status->chain_signal, mstat.chain_signal,
 	       sizeof(mstat.chain_signal));
 
-	if (mstat.wcid) {
-		status->link_valid = mstat.wcid->link_valid;
-		status->link_id = mstat.wcid->link_id;
+	wcid = __mt76_wcid_ptr(dev, mstat.wcid_idx);
+	if (wcid) {
+		status->link_valid = wcid->link_valid;
+		status->link_id = wcid->link_id;
 	}
 
-	*sta = wcid_to_sta(mstat.wcid);
+	*sta = wcid_to_sta(wcid);
 	*hw = mt76_phy_hw(dev, mstat.phy_idx);
 }
 
 static void
-mt76_check_ccmp_pn(struct sk_buff *skb)
+mt76_check_ccmp_pn(struct mt76_dev *dev, struct sk_buff *skb)
 {
 	struct mt76_rx_status *status = (struct mt76_rx_status *)skb->cb;
-	struct mt76_wcid *wcid = status->wcid;
+	struct mt76_wcid *wcid;
 	struct ieee80211_hdr *hdr;
 	int security_idx;
 	int ret;
@@ -1328,6 +1317,7 @@ mt76_check_ccmp_pn(struct sk_buff *skb)
 	if (status->flag & RX_FLAG_ONLY_MONITOR)
 		return;
 
+	wcid = __mt76_wcid_ptr(dev, status->wcid_idx);
 	if (!wcid || !wcid->rx_check_pn)
 		return;
 
@@ -1342,7 +1332,7 @@ mt76_check_ccmp_pn(struct sk_buff *skb)
 		 * All further fragments will be validated by mac80211 only.
 		 */
 		if (ieee80211_is_frag(hdr) &&
-		    !ieee80211_is_first_frag(hdr->seq_ctrl))
+		    !ieee80211_is_first_frag(hdr->frame_control))
 			return;
 	}
 
@@ -1375,7 +1365,7 @@ static void
 mt76_airtime_report(struct mt76_dev *dev, struct mt76_rx_status *status,
 		    int len)
 {
-	struct mt76_wcid *wcid = status->wcid;
+	struct mt76_wcid *wcid;
 	struct ieee80211_rx_status info = {
 		.enc_flags = status->enc_flags,
 		.rate_idx = status->rate_idx,
@@ -1393,6 +1383,7 @@ mt76_airtime_report(struct mt76_dev *dev, struct mt76_rx_status *status,
 	dev->cur_cc_bss_rx += airtime;
 	spin_unlock(&dev->cc_lock);
 
+	wcid = __mt76_wcid_ptr(dev, status->wcid_idx);
 	if (!wcid || !wcid->sta)
 		return;
 
@@ -1403,18 +1394,8 @@ mt76_airtime_report(struct mt76_dev *dev, struct mt76_rx_status *status,
 static void
 mt76_airtime_flush_ampdu(struct mt76_dev *dev)
 {
-	struct mt76_wcid *wcid;
-	int wcid_idx;
-
 	if (!dev->rx_ampdu_len)
 		return;
-
-	wcid_idx = dev->rx_ampdu_status.wcid_idx;
-	if (wcid_idx < ARRAY_SIZE(dev->wcid))
-		wcid = rcu_dereference(dev->wcid[wcid_idx]);
-	else
-		wcid = NULL;
-	dev->rx_ampdu_status.wcid = wcid;
 
 	mt76_airtime_report(dev, &dev->rx_ampdu_status, dev->rx_ampdu_len);
 
@@ -1426,11 +1407,12 @@ static void
 mt76_airtime_check(struct mt76_dev *dev, struct sk_buff *skb)
 {
 	struct mt76_rx_status *status = (struct mt76_rx_status *)skb->cb;
-	struct mt76_wcid *wcid = status->wcid;
+	struct mt76_wcid *wcid;
 
 	if (!(dev->drv->drv_flags & MT_DRV_SW_RX_AIRTIME))
 		return;
 
+	wcid = __mt76_wcid_ptr(dev, status->wcid_idx);
 	if (!wcid || !wcid->sta) {
 		struct ieee80211_hdr *hdr = mt76_skb_get_hdr(skb);
 
@@ -1469,16 +1451,21 @@ mt76_check_sta(struct mt76_dev *dev, struct sk_buff *skb)
 	struct ieee80211_hdr *hdr = mt76_skb_get_hdr(skb);
 	struct ieee80211_sta *sta;
 	struct ieee80211_hw *hw;
-	struct mt76_wcid *wcid = status->wcid;
+	struct mt76_wcid *wcid = __mt76_wcid_ptr(dev, status->wcid_idx);
 	u8 tidno = status->qos_ctl & IEEE80211_QOS_CTL_TID_MASK;
 	bool ps;
 
 	hw = mt76_phy_hw(dev, status->phy_idx);
 	if (ieee80211_is_pspoll(hdr->frame_control) && !wcid &&
 	    !(status->flag & RX_FLAG_8023)) {
+		if (hw->wiphy->flags & WIPHY_FLAG_SUPPORTS_MLO)
+			return;
+
 		sta = ieee80211_find_sta_by_ifaddr(hw, hdr->addr2, NULL);
-		if (sta)
-			wcid = status->wcid = (struct mt76_wcid *)sta->drv_priv;
+		if (sta) {
+			wcid = (struct mt76_wcid *)sta->drv_priv;
+			status->wcid_idx = wcid->idx;
+		}
 	}
 
 	mt76_airtime_check(dev, skb);
@@ -1542,7 +1529,7 @@ void mt76_rx_complete(struct mt76_dev *dev, struct sk_buff_head *frames,
 	while ((skb = __skb_dequeue(frames)) != NULL) {
 		struct sk_buff *nskb = skb_shinfo(skb)->frag_list;
 
-		mt76_check_ccmp_pn(skb);
+		mt76_check_ccmp_pn(dev, skb);
 		skb_shinfo(skb)->frag_list = NULL;
 		mt76_rx_convert(dev, skb, &hw, &sta);
 		ieee80211_rx_list(hw, sta, skb, &list);
@@ -1584,7 +1571,7 @@ void mt76_rx_poll_complete(struct mt76_dev *dev, enum mt76_rxq_id q,
 		    mt76_npu_device_active(dev))
 			__skb_queue_tail(&frames, skb);
 		else
-			mt76_rx_aggr_reorder(skb, &frames);
+			mt76_rx_aggr_reorder(dev, skb, &frames);
 	}
 
 	mt76_rx_complete(dev, &frames, napi);
@@ -1597,7 +1584,6 @@ mt76_sta_add(struct mt76_phy *phy, struct ieee80211_vif *vif,
 {
 	struct mt76_wcid *wcid = (struct mt76_wcid *)sta->drv_priv;
 	struct mt76_dev *dev = phy->dev;
-	struct mt76_wcid *published;
 	int ret;
 	int i;
 
@@ -1617,19 +1603,11 @@ mt76_sta_add(struct mt76_phy *phy, struct ieee80211_vif *vif,
 		mtxq->wcid = wcid->idx;
 	}
 
-	published = rcu_dereference_protected(dev->wcid[wcid->idx],
-					      lockdep_is_held(&dev->mutex));
-	if (published != wcid) {
-		WARN_ON_ONCE(published);
-		ewma_signal_init(&wcid->rssi);
-		rcu_assign_pointer(dev->wcid[wcid->idx], wcid);
-		mt76_wcid_init(wcid, phy->band_idx);
-	} else {
-		wcid->phy_idx = phy->band_idx;
-	}
-
+	ewma_signal_init(&wcid->rssi);
+	rcu_assign_pointer(dev->wcid[wcid->idx], wcid);
 	phy->num_sta++;
 
+	mt76_wcid_init(wcid, phy->band_idx);
 out:
 	mutex_unlock(&dev->mutex);
 
@@ -1750,16 +1728,6 @@ void mt76_wcid_cleanup(struct mt76_dev *dev, struct mt76_wcid *wcid)
 	mt76_tx_status_unlock(dev, &list);
 
 	idr_destroy(&wcid->pktid);
-
-	/* Remove from sta_poll_list to prevent list corruption after reset.
-	 * Without this, mt76_reset_device() reinitializes sta_poll_list but
-	 * leaves wcid->poll_list with stale pointers, causing list corruption
-	 * when mt76_wcid_add_poll() checks list_empty().
-	 */
-	spin_lock_bh(&dev->sta_poll_lock);
-	if (!list_empty(&wcid->poll_list))
-		list_del_init(&wcid->poll_list);
-	spin_unlock_bh(&dev->sta_poll_lock);
 
 	spin_lock_bh(&phy->tx_lock);
 

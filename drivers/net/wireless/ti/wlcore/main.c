@@ -5456,7 +5456,8 @@ out:
 
 static int wl12xx_set_bitrate_mask(struct ieee80211_hw *hw,
 				   struct ieee80211_vif *vif,
-				   const struct cfg80211_bitrate_mask *mask)
+				   const struct cfg80211_bitrate_mask *mask,
+				   unsigned int link_id)
 {
 	struct wl12xx_vif *wlvif = wl12xx_vif_to_data(vif);
 	struct wl1271 *wl = hw->priv;

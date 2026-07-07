@@ -42,19 +42,12 @@ bool ____mt76_poll_msec(struct mt76_dev *dev, u32 offset, u32 mask, u32 val,
 }
 EXPORT_SYMBOL_GPL(____mt76_poll_msec);
 
-int __mt76_wcid_alloc(u32 *mask, int min, int size)
+int mt76_wcid_alloc(u32 *mask, int size)
 {
-	u32 min_mask = ~0;
 	int i, idx = 0, cur;
 
-	mask += min / 32;
-	min %= 32;
-	if (min > 0)
-		min_mask = ~((1 << min) - 1);
-
 	for (i = 0; i < DIV_ROUND_UP(size, 32); i++) {
-		idx = ffs(~mask[i] & min_mask);
-		min_mask = ~0;
+		idx = ffs(~mask[i]);
 		if (!idx)
 			continue;
 
@@ -69,7 +62,7 @@ int __mt76_wcid_alloc(u32 *mask, int min, int size)
 
 	return -1;
 }
-EXPORT_SYMBOL_GPL(__mt76_wcid_alloc);
+EXPORT_SYMBOL_GPL(mt76_wcid_alloc);
 
 int mt76_get_min_avg_rssi(struct mt76_dev *dev, u8 phy_idx)
 {

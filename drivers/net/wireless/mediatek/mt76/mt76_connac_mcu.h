@@ -842,6 +842,8 @@ enum {
 	STA_REC_HDRT = 0x28,
 	STA_REC_EML_OP = 0x29,
 	STA_REC_HDR_TRANS = 0x2B,
+	STA_REC_TX_CAP = 0x2f,
+	STA_REC_PS_LEAVE = 0x45,
 	STA_REC_MAX_NUM
 };
 
@@ -1071,7 +1073,6 @@ enum {
 	MCU_UNI_EVENT_SCAN_DONE = 0x0e,
 	MCU_UNI_EVENT_RDD_REPORT = 0x11,
 	MCU_UNI_EVENT_ROC = 0x27,
-	MCU_UNI_EVENT_MBMC = 0x28,
 	MCU_UNI_EVENT_TX_DONE = 0x2d,
 	MCU_UNI_EVENT_THERMAL = 0x35,
 	MCU_UNI_EVENT_RSSI_MONITOR = 0x41,
@@ -1242,7 +1243,6 @@ enum {
 	MCU_EXT_CMD_THERMAL_CTRL = 0x2c,
 	MCU_EXT_CMD_WTBL_UPDATE = 0x32,
 	MCU_EXT_CMD_SET_DRR_CTRL = 0x36,
-	MCU_EXT_CMD_SET_FEATURE_CTRL = 0x38,
 	MCU_EXT_CMD_SET_RDD_CTRL = 0x3a,
 	MCU_EXT_CMD_ATE_CTRL = 0x3d,
 	MCU_EXT_CMD_PROTECT_CTRL = 0x3e,
@@ -1252,7 +1252,6 @@ enum {
 	MCU_EXT_CMD_MUAR_UPDATE = 0x48,
 	MCU_EXT_CMD_BCN_OFFLOAD = 0x49,
 	MCU_EXT_CMD_RX_AIRTIME_CTRL = 0x4a,
-	MCU_EXT_CMD_AT_PROC_MODULE = 0x4b,
 	MCU_EXT_CMD_SET_RX_PATH = 0x4e,
 	MCU_EXT_CMD_EFUSE_FREE_BLOCK = 0x4f,
 	MCU_EXT_CMD_AUTO_BA = 0x51,
@@ -1276,6 +1275,7 @@ enum {
 	MCU_EXT_CMD_GROUP_PRE_CAL_INFO = 0xab,
 	MCU_EXT_CMD_DPD_PRE_CAL_INFO = 0xac,
 	MCU_EXT_CMD_PHY_STAT_INFO = 0xad,
+	MCU_EXT_CMD_SET_QOS_MAP = 0xb4,
 	MCU_EXT_CMD_WF_RF_PIN_CTRL = 0xbd,
 };
 
@@ -1303,6 +1303,7 @@ enum {
 	MCU_UNI_CMD_GET_STAT_INFO = 0x23,
 	MCU_UNI_CMD_SNIFFER = 0x24,
 	MCU_UNI_CMD_SR = 0x25,
+	MCU_UNI_CMD_SCS = 0x26,
 	MCU_UNI_CMD_ROC = 0x27,
 	MCU_UNI_CMD_SET_DBDC_PARMS = 0x28,
 	MCU_UNI_CMD_TXPOWER = 0x2b,
@@ -1323,7 +1324,6 @@ enum {
 	MCU_UNI_CMD_PER_STA_INFO = 0x6d,
 	MCU_UNI_CMD_ALL_STA_INFO = 0x6e,
 	MCU_UNI_CMD_ASSERT_DUMP = 0x6f,
-	MCU_UNI_CMD_EXT_EEPROM_CTRL = 0x74,
 	MCU_UNI_CMD_RADIO_STATUS = 0x80,
 	MCU_UNI_CMD_MLD = 0x82,
 	MCU_UNI_CMD_SDO = 0x88,
@@ -1604,7 +1604,7 @@ struct mt76_connac_hw_scan_done {
 	u8 pno_enabled;
 	u8 pad2[3];
 	u8 sparse_channel_valid_num;
-	u8 alpha2[3];
+	u8 pad3[3];
 	u8 channel_num[MT76_CONNAC_SCAN_DONE_EVENT_MAX_CHANNEL_NUM];
 	/* idle format for channel_idle_time
 	 * 0: first bytes: idle time(ms) 2nd byte: dwell time(ms)
@@ -1617,7 +1617,6 @@ struct mt76_connac_hw_scan_done {
 	u8 mdrdy_count[MT76_CONNAC_SCAN_DONE_EVENT_MAX_CHANNEL_NUM];
 	__le32 beacon_2g_num;
 	__le32 beacon_5g_num;
-	__le16 channel_scan_time[MT76_CONNAC_SCAN_DONE_EVENT_MAX_CHANNEL_NUM];
 } __packed;
 
 struct mt76_connac_sched_scan_req {
@@ -1885,7 +1884,7 @@ mt76_connac_mcu_gen_dl_mode(struct mt76_dev *dev, u8 feature_set, bool is_wa)
 
 	ret |= feature_set & FW_FEATURE_SET_ENCRYPT ?
 	       DL_MODE_ENCRYPT | DL_MODE_RESET_SEC_IV : 0;
-	if (is_connac2(dev) || is_connac3(dev))
+	if (is_mt7921(dev) || is_mt7925(dev))
 		ret |= feature_set & FW_FEATURE_ENCRY_MODE ?
 		       DL_CONFIG_ENCRY_MODE_SEL : 0;
 	ret |= FIELD_PREP(DL_MODE_KEY_IDX,
@@ -1911,29 +1910,6 @@ mt76_connac_mcu_get_wlan_idx(struct mt76_dev *dev, struct mt76_wcid *wcid,
 	} else {
 		*wlan_idx_lo = wcid ? wcid->idx : 0;
 	}
-}
-
-#define MT76_CONNAC_MCU_STATUS_WLAN_FAILURE	0xc0000001
-
-static inline int
-mt76_connac_mcu_bss_deact_err(struct mt76_dev *mdev, int err, bool enable)
-{
-	if (err != (int)MT76_CONNAC_MCU_STATUS_WLAN_FAILURE)
-		return err;
-
-	/* Ignore wlan_failure state false alarm when deactivating an
-	 * inactive network. It does not harm the firmware state.
-	 */
-	if (!enable) {
-		dev_dbg(mdev->dev,
-			"ignore wlan_failure when bss is deactivated\n");
-		return 0;
-	}
-
-	dev_warn(mdev->dev,
-		 "wlan_failure when bss is activated\n");
-
-	return err;
 }
 
 struct sk_buff *
