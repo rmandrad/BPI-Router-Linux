@@ -2060,6 +2060,8 @@ struct mt76_txwi_cache *mt76_rx_token_find(struct mt76_dev *dev, int token);
 int mt76_rx_token_consume(struct mt76_dev *dev, void *ptr,
 			  struct mt76_txwi_cache *r, dma_addr_t phys);
 int mt76_create_page_pool(struct mt76_dev *dev, struct mt76_queue *q);
+bool mt76_add_rx_frag(struct mt76_queue *q, void *data, int len,
+		      bool allow_direct);
 static inline void mt76_put_page_pool_buf(void *buf, bool allow_direct)
 {
 	struct page *page = virt_to_head_page(buf);
