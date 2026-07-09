@@ -2039,7 +2039,7 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
 		u32 info = 0, data;
 		u8 signature;
 		void *buf;
-		bool ls;
+		bool ls, added;
 
 		seq_num = FIELD_GET(MT996_RRO_SN_MASK, start_seq + i);
 		e = mt7996_rro_addr_elem_get(dev, seq_id, seq_num);
@@ -2110,33 +2110,39 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
 			ls = FIELD_GET(RRO_HIF_DATA1_LS_MASK,
 				       le32_to_cpu(rxd->data1));
 			if (q->rx_head) {
-				/* TODO: Take into account non-linear skb. */
-				mt76_put_page_pool_buf(buf, false);
-				if (ls) {
-					dev_kfree_skb(q->rx_head);
-					q->rx_head = NULL;
-				}
-				goto next_page;
-			}
+				/* Continuation segment of an in-progress
+				 * reassembly: append as an skb frag. No
+				 * rx_check here -- matches the established
+				 * convention (see mt76_dma_rx_process) that
+				 * rx_check only runs on the last segment,
+				 * which carries the trailing per-packet
+				 * status.
+				 */
+				skb = q->rx_head;
+				added = mt76_add_rx_frag(q, buf, len, false);
+			} else {
+				if (ls && !mt7996_rx_check(mdev, buf, len))
+					goto next_page;
 
-			if (ls && !mt7996_rx_check(mdev, buf, len))
-				goto next_page;
+				skb = build_skb(buf, q->buf_size);
+				if (!skb)
+					goto next_page;
 
-			skb = build_skb(buf, q->buf_size);
-			if (!skb)
-				goto next_page;
-
-			skb_reserve(skb, q->buf_offset);
-			skb_mark_for_recycle(skb);
-			__skb_put(skb, len);
-
-			if (ind_reason == 1 || ind_reason == 2) {
-				dev_kfree_skb(skb);
-				goto next_page;
+				skb_reserve(skb, q->buf_offset);
+				skb_mark_for_recycle(skb);
+				__skb_put(skb, len);
+				added = true;
 			}
 
 			if (!ls) {
 				q->rx_head = skb;
+				goto next_page;
+			}
+
+			q->rx_head = NULL;
+
+			if (!added || ind_reason == 1 || ind_reason == 2) {
+				dev_kfree_skb(skb);
 				goto next_page;
 			}
 
