@@ -173,6 +173,15 @@ static void nft_dev_path_info(const struct net_device_path_stack *stack,
 			}
 			info->xmit_type = FLOW_OFFLOAD_XMIT_DIRECT;
 			break;
+		case DEV_PATH_MTK_WDMA:
+			/* Wireless egress via WED: the wifi netdev terminates
+			 * the path walk, so treat it as the output device to
+			 * let the PPE driver resolve the WDMA path itself.
+			 */
+			info->indev = path->dev;
+			if (is_zero_ether_addr(info->h_source))
+				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
+			break;
 		default:
 			info->indev = NULL;
 			break;
