@@ -17,6 +17,7 @@ struct reg_dump {
 enum {
 	DUMP_TYPE_STRING,
 	DUMP_TYPE_WED,
+	DUMP_TYPE_WED_TX_RING,
 	DUMP_TYPE_WDMA,
 	DUMP_TYPE_WPDMA_TX,
 	DUMP_TYPE_WPDMA_TXFREE,
@@ -34,9 +35,14 @@ enum {
 	{ _prefix " CIDX", _base + 0x8, __VA_ARGS__ },	\
 	{ _prefix " DIDX", _base + 0xc, __VA_ARGS__ }
 
+/* live TX ring backlog: how many entries are queued between CIDX and DIDX */
+#define CAL_TX_QCNT(_cidx, _didx, _cnt) \
+	((_cidx) >= (_didx) ? (_cidx) - (_didx) : (_cidx) - (_didx) + (_cnt))
+
 #define DUMP_WED(_reg) DUMP_REG(_reg, DUMP_TYPE_WED)
 #define DUMP_WED_MASK(_reg, _mask) DUMP_REG_MASK(_reg, _mask)
 #define DUMP_WED_RING(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WED)
+#define DUMP_WED_TX_RING(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WED_TX_RING)
 
 #define DUMP_WDMA(_reg) DUMP_REG(_reg, DUMP_TYPE_WDMA)
 #define DUMP_WDMA_RING(_base) DUMP_RING(#_base, MTK_##_base, DUMP_TYPE_WDMA)
@@ -58,7 +64,7 @@ dump_wed_regs(struct seq_file *s, struct mtk_wed_device *dev,
 	      const struct reg_dump *regs, int n_regs)
 {
 	const struct reg_dump *cur;
-	u32 val;
+	u32 val, tx_cnt = 0, tx_cidx = 0, tx_didx = 0;
 
 	for (cur = regs; cur < &regs[n_regs]; cur++) {
 		switch (cur->type) {
@@ -71,11 +77,26 @@ dump_wed_regs(struct seq_file *s, struct mtk_wed_device *dev,
 		case DUMP_TYPE_WED:
 			val = wed_r32(dev, cur->offset);
 			break;
+		case DUMP_TYPE_WED_TX_RING:
+			val = wed_r32(dev, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				tx_cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				tx_cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				tx_didx = val;
+			break;
 		case DUMP_TYPE_WDMA:
 			val = wdma_r32(dev, cur->offset);
 			break;
 		case DUMP_TYPE_WPDMA_TX:
 			val = wpdma_tx_r32(dev, cur->base, cur->offset);
+			if (strstr(cur->name, "CNT"))
+				tx_cnt = val;
+			else if (strstr(cur->name, "CIDX"))
+				tx_cidx = val;
+			else if (strstr(cur->name, "DIDX"))
+				tx_didx = val;
 			break;
 		case DUMP_TYPE_WPDMA_TXFREE:
 			val = wpdma_txfree_r32(dev, cur->offset);
@@ -85,6 +106,12 @@ dump_wed_regs(struct seq_file *s, struct mtk_wed_device *dev,
 			break;
 		}
 		print_reg_val(s, cur->name, val);
+
+		if ((cur->type == DUMP_TYPE_WED_TX_RING ||
+		     cur->type == DUMP_TYPE_WPDMA_TX) &&
+		    strstr(cur->name, "DIDX"))
+			print_reg_val(s, "  -> Qcnt",
+				      CAL_TX_QCNT(tx_cidx, tx_didx, tx_cnt));
 	}
 }
 
@@ -94,23 +121,33 @@ wed_txinfo_show(struct seq_file *s, void *data)
 	static const struct reg_dump regs[] = {
 		DUMP_STR("WED TX"),
 		DUMP_WED(WED_TX_MIB(0)),
-		DUMP_WED_RING(WED_RING_TX(0)),
+		DUMP_WED_TX_RING(WED_RING_TX(0)),
 
 		DUMP_WED(WED_TX_MIB(1)),
-		DUMP_WED_RING(WED_RING_TX(1)),
+		DUMP_WED_TX_RING(WED_RING_TX(1)),
 
 		DUMP_STR("WPDMA TX"),
 		DUMP_WED(WED_WPDMA_TX_MIB(0)),
-		DUMP_WED_RING(WED_WPDMA_RING_TX(0)),
+		DUMP_WED_TX_RING(WED_WPDMA_RING_TX(0)),
 		DUMP_WED(WED_WPDMA_TX_COHERENT_MIB(0)),
 
 		DUMP_WED(WED_WPDMA_TX_MIB(1)),
-		DUMP_WED_RING(WED_WPDMA_RING_TX(1)),
+		DUMP_WED_TX_RING(WED_WPDMA_RING_TX(1)),
 		DUMP_WED(WED_WPDMA_TX_COHERENT_MIB(1)),
 
 		DUMP_STR("WPDMA TX"),
 		DUMP_WPDMA_TX_RING(0),
 		DUMP_WPDMA_TX_RING(1),
+
+		DUMP_STR("WED TX buf info"),
+		DUMP_WED(WED_BM_STATUS),
+		DUMP_WED(WED_TX_BM_STATUS),
+		DUMP_WED(WED_TX_BM_RECYC),
+		DUMP_WED(WED_TX_TKID_STATUS),
+		DUMP_WED(WED_TX_TKID_RECYC),
+		DUMP_WED(WED_TX_FREE_TO_TX_TKID_TKID_MIB),
+		DUMP_WED(WED_TX_BM_TO_WDMA_RX_DRV_SKBID_MIB),
+		DUMP_WED(WED_TX_TKID_TO_TX_BM_FREE_SKBID_MIB),
 
 		DUMP_STR("WED WDMA RX"),
 		DUMP_WED(WED_WDMA_RX_MIB(0)),
