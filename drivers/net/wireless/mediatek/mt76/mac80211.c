@@ -224,15 +224,28 @@ static int mt76_led_init(struct mt76_phy *phy)
 		of_node_put(np);
 	}
 
-	snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s",
-		 wiphy_name(hw->wiphy));
+	if (hw->wiphy->n_radio > 1)
+		snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s-%u",
+			 wiphy_name(hw->wiphy), phy->band_idx);
+	else
+		snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s",
+			 wiphy_name(hw->wiphy));
 
 	phy->leds.cdev.name = phy->leds.name;
-	phy->leds.cdev.default_trigger =
-		ieee80211_create_tpt_led_trigger(hw,
-					IEEE80211_TPT_LEDTRIG_FL_RADIO,
-					mt76_tpt_blink,
-					ARRAY_SIZE(mt76_tpt_blink));
+
+	/* The throughput trigger is created once per ieee80211_hw. Under
+	 * single-wiphy MLO every band registers its own LED classdev for the
+	 * same hw and the bands can come up in any order, so create the trigger
+	 * on the first call, stash it on the primary phy and let the other bands
+	 * reuse it; calling it again would trip a WARN_ON().
+	 */
+	if (!dev->phy.leds.cdev.default_trigger)
+		dev->phy.leds.cdev.default_trigger =
+			ieee80211_create_tpt_led_trigger(hw,
+							 IEEE80211_TPT_LEDTRIG_FL_RADIO,
+							 mt76_tpt_blink,
+							 ARRAY_SIZE(mt76_tpt_blink));
+	phy->leds.cdev.default_trigger = dev->phy.leds.cdev.default_trigger;
 
 	dev_info(dev->dev,
 		"registering led '%s'\n", phy->leds.name);
