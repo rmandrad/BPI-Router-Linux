@@ -320,6 +320,9 @@ static void mt7996_led_set_config(struct led_classdev *led_cdev,
 		 */
 		mt76_rmw_field(dev, MT_TMAC_TCR0(mphy->band_idx),
 			       MT_TMAC_TCR0_TX_BLINK, 2);
+		val = MT_LED_CTRL_BLINK_MODE | MT_LED_CTRL_KICK;
+		if (mphy->band_idx == MT_BAND1)
+			val |= MT_LED_CTRL_BLINK_BAND_SEL;
 	}
 
 	if (mphy->leds.al)
