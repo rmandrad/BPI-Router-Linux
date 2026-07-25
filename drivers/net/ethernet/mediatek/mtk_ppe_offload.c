@@ -199,7 +199,7 @@ static struct nf_conn_acct *mtk_nf_conn_acct_find(const struct nf_conn *ct)
 {
 	struct nf_ct_ext *ext = ct->ext;
 
-	if (!ext || !ext->offset[NF_CT_EXT_ACCT] || unlikely(ext->gen_id))
+	if (!ext || !ext->offset[NF_CT_EXT_ACCT])
 		return NULL;
 
 	return (void *)ext + ext->offset[NF_CT_EXT_ACCT];
