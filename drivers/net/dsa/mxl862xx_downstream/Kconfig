@@ -2,6 +2,7 @@
 config NET_DSA_MXL862_DS
 	tristate "MaxLinear MxL862xx downstream driver"
 	depends on NET_DSA
+	select CRC32
 	#select NET_DSA_TAG_MXL862
 	select NET_DSA_TAG_MXL_862XX
 	select NET_DSA_TAG_MXL_862XX_8021Q

@@ -25,6 +25,7 @@
 #include "mxl862xx.h"
 #include "mxl862xx-api.h"
 #include "mxl862xx-cmd.h"
+#include "mxl862xx-fw.h"
 #include "mxl862xx-host.h"
 
 
@@ -3711,6 +3712,8 @@ static const struct dsa_switch_ops mxl862xx_switch_ops = {
 	.port_pre_bridge_flags = mxl862xx_port_pre_bridge_flags,
 	.port_bridge_flags = mxl862xx_port_bridge_flags,
 	.setup = mxl862xx_setup,
+	.devlink_info_get = mxl862xx_devlink_info_get,
+	.devlink_flash_update = mxl862xx_devlink_flash_update,
 };
 
 static void sfp_monitor_work_func(struct work_struct *work)
@@ -4019,6 +4022,10 @@ static int mxl862xx_probe(struct mdio_device *mdiodev)
 		dev_err(dev, "failed to read firmware version\n");
 		return -EINVAL;
 	}
+
+	priv->fw_version.major = fw_version.iv_major;
+	priv->fw_version.minor = fw_version.iv_minor;
+	priv->fw_version.revision = le16_to_cpu(fw_version.iv_revision);
 
 	dev_info(dev, "Firmware version %d.%d.%d.%d",
 		 fw_version.iv_major, fw_version.iv_minor,

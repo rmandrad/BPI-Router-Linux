@@ -102,6 +102,28 @@ struct combo_port_mux {
 	struct delayed_work	sfp_monitor_work;
 };
 
+/**
+ * union mxl862xx_fw_version - firmware version for display
+ * @major: firmware major version
+ * @minor: firmware minor version
+ * @revision: firmware revision number
+ * @raw: combined u32 with major in the most-significant byte
+ */
+union mxl862xx_fw_version {
+	struct {
+#if defined(__BIG_ENDIAN)
+		u8 major;
+		u8 minor;
+		u16 revision;
+#elif defined(__LITTLE_ENDIAN)
+		u16 revision;
+		u8 minor;
+		u8 major;
+#endif
+	};
+	u32 raw;
+};
+
 struct mxl862xx_priv {
 	struct dsa_switch *ds;
 	struct mii_bus *bus;
@@ -121,4 +143,10 @@ struct mxl862xx_priv {
 	uint8_t user_pnum;
 	struct mxl862xx_pcs pcs_port_1;
 	struct combo_port_mux *ds_mux[MAX_PORTS];
+	/* cached firmware version, populated at probe */
+	union mxl862xx_fw_version fw_version;
+	/* reject firmware API commands while reflashing */
+	bool block_host;
+	/* silently discard API commands during post-flash teardown */
+	bool skip_teardown;
 };
