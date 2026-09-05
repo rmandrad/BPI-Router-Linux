@@ -329,6 +329,7 @@ void debug_proc_exit(void);
 int mtketh_debugfs_init(struct mtk_eth *eth);
 void mtketh_debugfs_exit(struct mtk_eth *eth);
 int mtk_do_priv_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd);
+extern u32 mtk_hwlro_stats_ebl;
 void hw_lro_stats_update(u32 ring_no, struct mtk_rx_dma_v2 *rxd);
 void hw_lro_flush_stats_update(u32 ring_no, struct mtk_rx_dma_v2 *rxd);
 

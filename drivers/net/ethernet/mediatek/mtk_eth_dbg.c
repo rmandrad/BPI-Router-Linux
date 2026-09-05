@@ -1807,7 +1807,6 @@ static ssize_t hw_lro_auto_tlb_write(struct file *file, const char __user *buffe
 	char *p_delimiter = " \t";
 	long x = 0, y = 0;
 	u32 len = count;
-	int ret;
 
 	if (len >= sizeof(buf)) {
 		pr_info("Input handling fail!\n");
@@ -1823,15 +1822,17 @@ static ssize_t hw_lro_auto_tlb_write(struct file *file, const char __user *buffe
 	p_token = strsep(&p_buf, p_delimiter);
 	if (!p_token)
 		x = 0;
-	else
-		ret = kstrtol(p_token, 10, &x);
+	else if (kstrtol(p_token, 10, &x))
+		return -EINVAL;
 
 	p_token = strsep(&p_buf, "\t\n ");
-	if (p_token)
-		ret = kstrtol(p_token, 10, &y);
+	if (p_token && kstrtol(p_token, 10, &y))
+		return -EINVAL;
 
-	if (lro_dbg_func[x] && (ARRAY_SIZE(lro_dbg_func) > x))
-		(*lro_dbg_func[x]) (y);
+	if (x < 0 || x >= (long)ARRAY_SIZE(lro_dbg_func) || !lro_dbg_func[x])
+		return -EINVAL;
+
+	(*lro_dbg_func[x])(y);
 
 	return count;
 }

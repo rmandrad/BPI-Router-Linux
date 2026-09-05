@@ -2552,6 +2552,12 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 
 		pktlen = RX_DMA_GET_PLEN0(trxd.rxd2);
 
+		if (eth->hwlro && mtk_hwlro_stats_ebl &&
+		    ring->ring_no >= MTK_HW_LRO_RING(eth, 0)) {
+			hw_lro_stats_update(ring->ring_no, &trxd);
+			hw_lro_flush_stats_update(ring->ring_no, &trxd);
+		}
+
 		/* alloc new buffer */
 		if (ring->page_pool) {
 			struct page *page = virt_to_head_page(data);
@@ -3121,7 +3127,11 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 	if (!ring->data)
 		return -ENOMEM;
 
-	if (mtk_page_pool_enabled(eth))  {
+	/* HW LRO rings advertise MTK_MAX_LRO_RX_LENGTH (~13.8K) in the
+	 * descriptor's PLEN0 field, which no order-0 page pool buffer can
+	 * satisfy.  Keep those rings on the high-order frag allocator.
+	 */
+	if (mtk_page_pool_enabled(eth) && rx_flag != MTK_RX_FLAGS_HWLRO)  {
 		struct page_pool *pp;
 
 		pp = mtk_create_page_pool(eth, &ring->xdp_q, ring_no,
