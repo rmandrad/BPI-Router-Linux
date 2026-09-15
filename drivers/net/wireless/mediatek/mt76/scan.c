@@ -16,10 +16,17 @@ static void mt76_scan_complete(struct mt76_dev *dev, bool abort)
 
 	clear_bit(MT76_SCANNING, &phy->state);
 
-	if (dev->scan.chan && phy->main_chandef.chan && phy->offchannel &&
+	/* Re-program the operating channel even when the scan never left it:
+	 * any channel set during the scan ran with MT76_SCANNING held, which
+	 * left DFS radar detection disabled
+	 */
+	if (phy->main_chandef.chan &&
 	    !test_bit(MT76_MCU_RESET, &dev->phy.state)) {
+		bool offchannel = phy->offchannel;
+
 		mt76_set_channel(phy, &phy->main_chandef, false);
-		mt76_offchannel_notify(phy, false);
+		if (offchannel)
+			mt76_offchannel_notify(phy, false);
 	}
 	mt76_put_vif_phy_link(phy, dev->scan.vif, dev->scan.mlink);
 	memset(&dev->scan, 0, sizeof(dev->scan));
@@ -79,6 +86,7 @@ mt76_scan_send_probe(struct mt76_dev *dev, struct cfg80211_ssid *ssid)
 	info->control.flags |= IEEE80211_TX_CTRL_DONT_USE_RATE_MASK;
 
 	link_id = mvif->wcid ? mvif->wcid->link_id : IEEE80211_LINK_UNSPECIFIED;
+	info->control.flags &= ~IEEE80211_TX_CTRL_MLO_LINK;
 	info->control.flags |= u32_encode_bits(link_id, IEEE80211_TX_CTRL_MLO_LINK);
 
 	mt76_tx(phy, NULL, mvif->wcid, skb);
