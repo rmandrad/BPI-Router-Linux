@@ -186,18 +186,6 @@ mt76_dma_queue_magic_cnt_init(struct mt76_dev *dev, struct mt76_queue *q)
 	}
 }
 
-/* A hung bus (e.g. after a PCIe AER error) reads 0xffffffff from every
- * register, so clamp an out-of-range index to the fallback to keep it from
- * corrupting q->head/q->tail.
- */
-static int
-mt76_dma_read_dma_idx(struct mt76_queue *q, int fallback)
-{
-	u32 idx = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
-
-	return idx < q->ndesc ? idx : fallback;
-}
-
 static void
 mt76_dma_sync_idx(struct mt76_dev *dev, struct mt76_queue *q)
 {
@@ -213,8 +201,7 @@ mt76_dma_sync_idx(struct mt76_dev *dev, struct mt76_queue *q)
 	}
 
 	Q_WRITE(q, desc_base, q->desc_dma, MT_QUEUE_DESC_BASE);
-
-	q->head = mt76_dma_read_dma_idx(q, 0);
+	q->head = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 	q->tail = q->head;
 }
 
@@ -432,7 +419,7 @@ mt76_dma_tx_cleanup(struct mt76_dev *dev, struct mt76_queue *q, bool flush)
 	if (flush)
 		last = -1;
 	else
-		last = mt76_dma_read_dma_idx(q, -1);
+		last = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 
 	while (q->queued > 0 && q->tail != last) {
 		if ((q->flags & MT_QFLAG_CHECK_DDONE) &&
@@ -449,7 +436,7 @@ mt76_dma_tx_cleanup(struct mt76_dev *dev, struct mt76_queue *q, bool flush)
 		}
 
 		if (!flush && q->tail == last)
-			last = mt76_dma_read_dma_idx(q, -1);
+			last = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 	}
 	spin_unlock_bh(&q->cleanup_lock);
 
@@ -568,13 +555,8 @@ mt76_dma_get_buf(struct mt76_dev *dev, struct mt76_queue *q, int idx,
 		t->ptr = NULL;
 
 		mt76_put_rxwi(dev, t);
-#ifdef CONFIG_NET_MEDIATEK_SOC_WED
-		/* the WO MCU owns the RX path only on WED v2, on newer
-		 * versions this buf1 bit carries no drop information
-		 */
-		if (drop && dev->mmio.wed.version == 2)
+		if (drop)
 			*drop |= !!(buf1 & MT_DMA_CTL_WO_DROP);
-#endif
 	} else {
 		dma_sync_single_for_cpu(dev->dma_dev, e->dma_addr[0],
 				SKB_WITH_OVERHEAD(q->buf_size),
@@ -635,9 +617,6 @@ mt76_dma_dequeue(struct mt76_dev *dev, struct mt76_queue *q, bool flush,
 		else if (!(q->desc[idx].ctrl & cpu_to_le32(MT_DMA_CTL_DMA_DONE)))
 			return NULL;
 #if IS_ENABLED(CONFIG_NET_MEDIATEK_SOC_WED)
-		/* on WED v3 the M_DONE bit signals that WED is done reading
-		 * the txfree descriptor; WED v2 does not set it
-		 */
 		else if (dev->mmio.wed.version > 2 &&
 			 mt76_queue_is_wed_tx_free(q) &&
 			 !(q->desc[idx].ctrl & cpu_to_le32(MT_DMA_CTL_M_DONE)))
@@ -673,8 +652,8 @@ mt76_dma_tx_queue_skb_raw(struct mt76_dev *dev, struct mt76_queue *q,
 	buf.len = skb->len;
 
 	spin_lock_bh(&q->lock);
-	if (mt76_dma_add_buf(dev, q, &buf, 1, tx_info, skb, NULL) >= 0)
-		mt76_dma_kick_queue(dev, q);
+	mt76_dma_add_buf(dev, q, &buf, 1, tx_info, skb, NULL);
+	mt76_dma_kick_queue(dev, q);
 	spin_unlock_bh(&q->lock);
 
 	return 0;
@@ -1037,24 +1016,23 @@ mt76_dma_rx_process(struct mt76_dev *dev, struct mt76_queue *q, int budget)
 	struct sk_buff *skb;
 	unsigned char *data;
 	bool check_ddone = false;
-	bool allow_direct = !mt76_queue_is_wed_rx(q) &&
-			    !mt76_queue_is_wed_rro_rxdmad_c(q);
+	bool allow_direct = !mt76_queue_is_wed_rx(q);
 	bool more;
 
 	if ((q->flags & MT_QFLAG_WED_RRO_EN) ||
 	    (IS_ENABLED(CONFIG_NET_MEDIATEK_SOC_WED) &&
 	     mt76_queue_is_wed_tx_free(q))) {
-		dma_idx = mt76_dma_read_dma_idx(q, q->tail);
+		dma_idx = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 		check_ddone = true;
 	}
 
 	while (done < budget) {
 		bool drop = false;
-		u32 info = 0;
+		u32 info;
 
 		if (check_ddone) {
 			if (q->tail == dma_idx)
-				dma_idx = mt76_dma_read_dma_idx(q, q->tail);
+				dma_idx = Q_READ(q, dma_idx, MT_QUEUE_DMA_IDX);
 
 			if (q->tail == dma_idx)
 				break;

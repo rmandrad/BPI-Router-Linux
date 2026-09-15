@@ -2663,7 +2663,7 @@ mt7996_mcu_sta_rate_ctrl_tlv(struct sk_buff *skb, struct mt7996_dev *dev,
 			cap |= STA_CAP_VHT_SGI_160;
 		if (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_TXSTBC)
 			cap |= STA_CAP_VHT_TX_STBC;
-		if (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_MASK)
+		if (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_RXSTBC_1)
 			cap |= STA_CAP_VHT_RX_STBC;
 		if ((vif->type != NL80211_IFTYPE_AP || link_conf->vht_ldpc) &&
 		    (link_sta->vht_cap.cap & IEEE80211_VHT_CAP_RXLDPC))
@@ -4194,9 +4194,6 @@ int mt7996_mcu_rdd_background_enable(struct mt7996_phy *phy,
 	struct mt7996_dev *dev = phy->dev;
 	int err, region, rdd_idx = mt7996_get_rdd_idx(phy, true);
 
-	if (rdd_idx < 0)
-		return -EINVAL;
-
 	if (!chandef) { /* disable offchain */
 		err = mt7996_mcu_rdd_cmd(dev, RDD_STOP, rdd_idx, 0);
 		if (err)
@@ -4595,31 +4592,21 @@ int mt7996_mcu_get_chip_config(struct mt7996_dev *dev, u32 *cap)
 		return ret;
 
 	/* fixed field */
-	if (skb->len < 4) {
-		dev_kfree_skb(skb);
-		return -EINVAL;
-	}
 	skb_pull(skb, 4);
 
 	buf = skb->data;
-	while (buf - skb->data + sizeof(struct tlv) <= skb->len) {
+	while (buf - skb->data < skb->len) {
 		struct tlv *tlv = (struct tlv *)buf;
-		u16 tlv_len = le16_to_cpu(tlv->len);
-
-		if (tlv_len < sizeof(*tlv) ||
-		    tlv_len > skb->len - (buf - skb->data))
-			break;
 
 		switch (le16_to_cpu(tlv->tag)) {
 		case UNI_EVENT_CHIP_CONFIG_EFUSE_VERSION:
-			if (tlv_len >= sizeof(*tlv) + sizeof(__le32))
-				*cap = le32_to_cpu(*(__le32 *)(buf + sizeof(*tlv)));
+			*cap = le32_to_cpu(*(__le32 *)(buf + sizeof(*tlv)));
 			break;
 		default:
 			break;
 		}
 
-		buf += tlv_len;
+		buf += le16_to_cpu(tlv->len);
 	}
 
 	dev_kfree_skb(skb);
