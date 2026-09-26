@@ -1462,10 +1462,14 @@ static int mxl862xx_setup(struct dsa_switch *ds)
 	if (ret)
 		goto free_trap_fid;
 
+	ret = mxl862xx_setup_mdio(ds);
+	if (ret)
+		return ret;
+
 	schedule_delayed_work(&priv->stats_work,
 			      MXL862XX_STATS_POLL_INTERVAL);
 
-	return mxl862xx_setup_mdio(ds);
+	return 0;
 
 free_trap_fid:
 	mxl862xx_free_fw_bridge(priv, priv->cpu_trap_fid);
@@ -3365,12 +3369,17 @@ err_restore:
 
 static void mxl862xx_teardown(struct dsa_switch *ds)
 {
+	struct mxl862xx_priv *priv = ds->priv;
+
 	/* tag_8021q teardown is handled in mxl862xx_remove() under
 	 * RTNL, before dsa_unregister_switch() takes dsa2_mutex.
 	 * dsa_tag_8021q_unregister() needs RTNL for vlan_vid_del(),
 	 * and acquiring RTNL inside teardown() (which runs under
 	 * dsa2_mutex) would invert the RTNL -> dsa2_mutex lock order.
 	 */
+
+	mxl862xx_stop_work(priv);
+	disable_delayed_work_sync(&priv->stats_work);
 }
 
 static int mxl862xx_port_setup(struct dsa_switch *ds, int port)
@@ -4855,7 +4864,6 @@ static int mxl862xx_probe(struct mdio_device *mdiodev)
 	err = dsa_register_switch(ds);
 	if (err) {
 		mxl862xx_stop_work(priv);
-		cancel_delayed_work_sync(&priv->stats_work);
 		mxl862xx_host_shutdown(priv);
 		for (i = 0; i < MXL862XX_MAX_PORTS; i++)
 			cancel_work_sync(&priv->ports[i].host_flood_work);
@@ -4897,7 +4905,6 @@ static void mxl862xx_remove(struct mdio_device *mdiodev)
 	priv = ds->priv;
 
 	mxl862xx_stop_work(priv);
-	cancel_delayed_work_sync(&priv->stats_work);
 
 	/* Tear down tag_8021q under RTNL before dsa_unregister_switch().
 	 * dsa_tag_8021q_unregister() calls vlan_vid_del() which needs
@@ -4940,7 +4947,7 @@ static void mxl862xx_shutdown(struct mdio_device *mdiodev)
 	dsa_switch_shutdown(ds);
 
 	mxl862xx_stop_work(priv);
-	cancel_delayed_work_sync(&priv->stats_work);
+	disable_delayed_work_sync(&priv->stats_work);
 
 	mxl862xx_host_shutdown(priv);
 
