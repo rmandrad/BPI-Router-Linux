@@ -7063,6 +7063,11 @@ err_unreg_netdev:
 	mtk_napi_del(eth);
 	free_netdev(eth->dummy_dev);
 err_deinit_ppe:
+	/* A netdev opened while probe was still registering can have queued
+	 * the frame-engine reset worker, which takes rtnl and drives the
+	 * hardware; cancel it before anything below is torn down.
+	 */
+	cancel_work_sync(&eth->pending_work);
 	mtk_ppe_deinit(eth);
 	mtk_release_all_muxes(eth);
 	mtk_mdio_cleanup(eth);
