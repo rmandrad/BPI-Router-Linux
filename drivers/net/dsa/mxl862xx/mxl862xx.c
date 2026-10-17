@@ -1458,10 +1458,14 @@ static int mxl862xx_setup(struct dsa_switch *ds)
 	if (ret)
 		goto free_trap_fid;
 
+	ret = mxl862xx_setup_mdio(ds);
+	if (ret)
+		goto free_trap_fid;
+
 	schedule_delayed_work(&priv->stats_work,
 			      MXL862XX_STATS_POLL_INTERVAL);
 
-	return mxl862xx_setup_mdio(ds);
+	return 0;
 
 free_trap_fid:
 	mxl862xx_free_fw_bridge(priv, priv->cpu_trap_fid);
@@ -3361,6 +3365,11 @@ err_restore:
 
 static void mxl862xx_teardown(struct dsa_switch *ds)
 {
+	struct mxl862xx_priv *priv = ds->priv;
+
+	set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
+	disable_delayed_work_sync(&priv->stats_work);
+
 	/* tag_8021q teardown is handled in mxl862xx_remove() under
 	 * RTNL, before dsa_unregister_switch() takes dsa2_mutex.
 	 * dsa_tag_8021q_unregister() needs RTNL for vlan_vid_del(),
@@ -4534,9 +4543,7 @@ static void mxl862xx_get_stats64(struct dsa_switch *ds, int port,
 
 	spin_unlock_bh(&priv->ports[port].stats_lock);
 
-	/* Trigger a fresh poll so the next read sees up-to-date counters.
-	 * No-op if the work is already pending, running, or teardown started.
-	 */
+	/* Trigger a fresh poll so the next read sees up-to-date counters. */
 	if (!test_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags))
 		schedule_delayed_work(&priv->stats_work, 0);
 }
@@ -4636,7 +4643,6 @@ static int mxl862xx_probe(struct mdio_device *mdiodev)
 	err = dsa_register_switch(ds);
 	if (err) {
 		set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
-		cancel_delayed_work_sync(&priv->stats_work);
 		mxl862xx_host_shutdown(priv);
 		for (i = 0; i < MXL862XX_MAX_PORTS; i++)
 			cancel_work_sync(&priv->ports[i].host_flood_work);
@@ -4657,7 +4663,6 @@ static void mxl862xx_remove(struct mdio_device *mdiodev)
 	priv = ds->priv;
 
 	set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
-	cancel_delayed_work_sync(&priv->stats_work);
 
 	/* Tear down tag_8021q under RTNL before dsa_unregister_switch().
 	 * dsa_tag_8021q_unregister() calls vlan_vid_del() which needs
@@ -4699,7 +4704,7 @@ static void mxl862xx_shutdown(struct mdio_device *mdiodev)
 	dsa_switch_shutdown(ds);
 
 	set_bit(MXL862XX_FLAG_WORK_STOPPED, &priv->flags);
-	cancel_delayed_work_sync(&priv->stats_work);
+	disable_delayed_work_sync(&priv->stats_work);
 
 	mxl862xx_host_shutdown(priv);
 
