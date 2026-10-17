@@ -112,7 +112,7 @@ properties:
   mediatek,wed:
     $ref: /schemas/types.yaml#/definitions/phandle-array
     minItems: 1
-    maxItems: 2
+    maxItems: 3
     items:
       maxItems: 1
     description:
@@ -389,7 +389,8 @@ allOf:
           maxItems: 2
 
         mediatek,wed:
-          minItems: 2
+          minItems: 3
+          maxItems: 3
 
   - if:
       properties:

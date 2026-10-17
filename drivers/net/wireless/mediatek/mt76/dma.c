@@ -970,28 +970,40 @@ mt76_dma_rx_reset(struct mt76_dev *dev, enum mt76_rxq_id qid)
 		mt76_dma_rx_fill(dev, q, false);
 }
 
+bool mt76_add_rx_frag(struct mt76_queue *q, void *data, int len,
+		      bool allow_direct)
+{
+	struct sk_buff *skb = q->rx_head;
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	int nr_frags = shinfo->nr_frags;
+	struct page *page;
+	int offset;
+
+	if (nr_frags >= ARRAY_SIZE(shinfo->frags)) {
+		mt76_put_page_pool_buf(data, allow_direct);
+		return false;
+	}
+
+	page = virt_to_head_page(data);
+	offset = data - page_address(page) + q->buf_offset;
+	skb_add_rx_frag(skb, nr_frags, page, offset, len, q->buf_size);
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(mt76_add_rx_frag);
+
 static void
 mt76_add_fragment(struct mt76_dev *dev, struct mt76_queue *q, void *data,
 		  int len, bool more, u32 info, bool allow_direct)
 {
 	struct sk_buff *skb = q->rx_head;
-	struct skb_shared_info *shinfo = skb_shinfo(skb);
-	int nr_frags = shinfo->nr_frags;
-
-	if (nr_frags < ARRAY_SIZE(shinfo->frags)) {
-		struct page *page = virt_to_head_page(data);
-		int offset = data - page_address(page) + q->buf_offset;
-
-		skb_add_rx_frag(skb, nr_frags, page, offset, len, q->buf_size);
-	} else {
-		mt76_put_page_pool_buf(data, allow_direct);
-	}
+	bool added = mt76_add_rx_frag(q, data, len, allow_direct);
 
 	if (more)
 		return;
 
 	q->rx_head = NULL;
-	if (nr_frags < ARRAY_SIZE(shinfo->frags))
+	if (added)
 		dev->drv->rx_skb(dev, q - dev->q_rx, skb, &info);
 	else
 		dev_kfree_skb(skb);

@@ -51,6 +51,28 @@
 static struct mtk_wed_hw *hw_list[3];
 static DEFINE_MUTEX(hw_lock);
 
+static int mtk_wed_get_region_resource(struct device_node *np,
+				       const char *name,
+				       const char *fallback_phandle,
+				       struct resource *res)
+{
+	struct device_node *target_np;
+	int ret;
+
+	ret = of_reserved_mem_region_to_resource_byname(np, name, res);
+	if (!ret || !fallback_phandle)
+		return ret;
+
+	target_np = of_parse_phandle(np, fallback_phandle, 0);
+	if (!target_np)
+		return ret;
+
+	ret = of_address_to_resource(target_np, 0, res);
+	of_node_put(target_np);
+
+	return ret;
+}
+
 struct mtk_wed_flow_block_priv {
 	struct mtk_wed_hw *hw;
 	struct net_device *dev;
@@ -600,7 +622,7 @@ mtk_wed_amsdu_init(struct mtk_wed_device *dev)
 			wed_amsdu[i].txd_phy);
 
 	/* init all sta parameter */
-	wed_w32(dev, MTK_WED_AMSDU_STA_INFO_INIT, MTK_WED_AMSDU_STA_RMVL |
+	wed_w32(dev, MTK_WED_AMSDU_STA_INFO_INIT,
 		MTK_WED_AMSDU_STA_WTBL_HDRT_MODE |
 		FIELD_PREP(MTK_WED_AMSDU_STA_MAX_AMSDU_LEN,
 			   dev->wlan.amsdu_max_len >> 8) |
@@ -618,7 +640,7 @@ mtk_wed_amsdu_init(struct mtk_wed_device *dev)
 
 	/* init partial amsdu offload txd src */
 	wed_set(dev, MTK_WED_AMSDU_HIFTXD_CFG,
-		FIELD_PREP(MTK_WED_AMSDU_HIFTXD_SRC, dev->hw->index));
+		FIELD_PREP(MTK_WED_AMSDU_HIFTXD_SRC, (dev->hw->index ? 1 : 0)));
 
 	/* init qmem */
 	wed_set(dev, MTK_WED_AMSDU_PSE, MTK_WED_AMSDU_PSE_RESET);
@@ -629,7 +651,7 @@ mtk_wed_amsdu_init(struct mtk_wed_device *dev)
 	}
 
 	/* Kite and Eagle E1 PCIE1 tx ring 22 flow control issue */
-	if (dev->wlan.id == 0x7991 || dev->wlan.id == 0x7992)
+	if (dev->wlan.fc_disable)
 		wed_clr(dev, MTK_WED_AMSDU_FIFO, MTK_WED_AMSDU_IS_PRIOR0_RING);
 
 	wed_set(dev, MTK_WED_CTRL, MTK_WED_CTRL_TX_AMSDU_EN);
@@ -1257,7 +1279,7 @@ mtk_wed_set_wpdma(struct mtk_wed_device *dev)
 
 	wed_w32(dev, MTK_WED_RRO_RX_D_CFG(0), dev->wlan.wpdma_rx_rro[0]);
 	wed_w32(dev, MTK_WED_RRO_RX_D_CFG(1), dev->wlan.wpdma_rx_rro[1]);
-	for (i = 0; i < MTK_WED_RX_PAGE_QUEUES; i++)
+	for (i = 0; i < dev->wlan.pg_ring_num; i++)
 		wed_w32(dev, MTK_WED_RRO_MSDU_PG_RING_CFG(i),
 			dev->wlan.wpdma_rx_pg + i * 0x10);
 }
@@ -1332,7 +1354,8 @@ mtk_wed_rro_alloc(struct mtk_wed_device *dev)
 	struct resource res;
 	int ret;
 
-	ret = of_reserved_mem_region_to_resource_byname(dev->hw->node, "wo-dlm", &res);
+	ret = mtk_wed_get_region_resource(dev->hw->node, "wo-dlm",
+					  "mediatek,wo-dlm", &res);
 	if (ret)
 		return ret;
 
@@ -1665,8 +1688,8 @@ mtk_wed_rx_reset(struct mtk_wed_device *dev)
 	/* reset tx wdma drv */
 	wed_clr(dev, MTK_WED_WDMA_GLO_CFG, MTK_WED_WDMA_GLO_CFG_TX_DRV_EN);
 	if (mtk_wed_is_v3_or_greater(dev->hw))
-		mtk_wed_poll_busy(dev, MTK_WED_WPDMA_STATUS,
-				  MTK_WED_WPDMA_STATUS_TX_DRV);
+		mtk_wed_poll_busy(dev, MTK_WED_WDMA_STATUS,
+				  MTK_WED_WDMA_STATUS_TX_DRV);
 	else
 		mtk_wed_poll_busy(dev, MTK_WED_CTRL,
 				  MTK_WED_CTRL_WDMA_INT_AGENT_BUSY);
@@ -1797,21 +1820,32 @@ mtk_wed_reset_dma(struct mtk_wed_device *dev)
 
 	/* 3. reset WED WPDMA tx */
 	wed_clr(dev, MTK_WED_CTRL, MTK_WED_CTRL_WED_TX_FREE_AGENT_EN);
+	mtk_wed_poll_busy(dev, MTK_WED_CTRL,
+			  MTK_WED_CTRL_WED_TX_FREE_AGENT_BUSY);
 
 	for (i = 0; i < 100; i++) {
-		if (mtk_wed_is_v1(dev->hw))
+		if (mtk_wed_is_v1(dev->hw)) {
 			val = FIELD_GET(MTK_WED_TX_BM_INTF_TKFIFO_FDEP,
 					wed_r32(dev, MTK_WED_TX_BM_INTF));
-		else
+			if (val == 0x40)
+				break;
+		} else {
 			val = FIELD_GET(MTK_WED_TX_TKID_INTF_TKFIFO_FDEP,
 					wed_r32(dev, MTK_WED_TX_TKID_INTF));
-		if (val == 0x40)
-			break;
+			if (val == 0x200)
+				break;
+		}
 	}
 
 	mtk_wed_reset(dev, MTK_WED_RESET_TX_FREE_AGENT);
 	wed_clr(dev, MTK_WED_CTRL, MTK_WED_CTRL_WED_TX_BM_EN);
 	mtk_wed_reset(dev, MTK_WED_RESET_TX_BM);
+	mtk_wed_poll_busy(dev, MTK_WED_CTRL, MTK_WED_CTRL_WED_TX_BM_BUSY);
+
+	if (mtk_wed_is_v3_or_greater(dev->hw)) {
+		mtk_wed_free_tx_buffer(dev);
+		mtk_wed_tx_buffer_alloc(dev);
+	}
 
 	/* 4. reset WED WPDMA tx */
 	busy = mtk_wed_poll_busy(dev, MTK_WED_WPDMA_GLO_CFG,
@@ -2166,6 +2200,7 @@ static void
 mtk_wed_start_hw_rro(struct mtk_wed_device *dev, u32 irq_mask, bool reset)
 {
 	int i;
+	u32 val = 0;
 
 	wed_w32(dev, MTK_WED_WPDMA_INT_MASK, irq_mask);
 	wed_w32(dev, MTK_WED_INT_MASK, irq_mask);
@@ -2193,19 +2228,30 @@ mtk_wed_start_hw_rro(struct mtk_wed_device *dev, u32 irq_mask, bool reset)
 		FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_RX1_DONE_TRIG,
 			   dev->wlan.rro_rx_tbit[1]));
 
-	wed_w32(dev, MTK_WED_WPDMA_INT_CTRL_RRO_MSDU_PG,
-		MTK_WED_WPDMA_INT_CTRL_RRO_PG0_EN |
-		MTK_WED_WPDMA_INT_CTRL_RRO_PG0_CLR |
-		MTK_WED_WPDMA_INT_CTRL_RRO_PG1_EN |
-		MTK_WED_WPDMA_INT_CTRL_RRO_PG1_CLR |
-		MTK_WED_WPDMA_INT_CTRL_RRO_PG2_EN |
-		MTK_WED_WPDMA_INT_CTRL_RRO_PG2_CLR |
-		FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_PG0_DONE_TRIG,
-			   dev->wlan.rx_pg_tbit[0]) |
-		FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_PG1_DONE_TRIG,
-			   dev->wlan.rx_pg_tbit[1]) |
-		FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_PG2_DONE_TRIG,
-			   dev->wlan.rx_pg_tbit[2]));
+	switch (dev->wlan.pg_ring_num) {
+	case 3:
+		val |= MTK_WED_WPDMA_INT_CTRL_RRO_PG2_EN |
+		       MTK_WED_WPDMA_INT_CTRL_RRO_PG2_CLR |
+		       MTK_WED_WPDMA_INT_CTRL_RRO_PG1_EN |
+		       MTK_WED_WPDMA_INT_CTRL_RRO_PG1_CLR |
+		       FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_PG2_DONE_TRIG,
+				  dev->wlan.rx_pg_tbit[2]) |
+		       FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_PG1_DONE_TRIG,
+				  dev->wlan.rx_pg_tbit[1]);
+		fallthrough;
+	case 1:
+		val |= MTK_WED_WPDMA_INT_CTRL_RRO_PG0_EN |
+		       MTK_WED_WPDMA_INT_CTRL_RRO_PG0_CLR |
+		       FIELD_PREP(MTK_WED_WPDMA_INT_CTRL_RRO_PG0_DONE_TRIG,
+				  dev->wlan.rx_pg_tbit[0]);
+		wed_w32(dev, MTK_WED_WPDMA_INT_CTRL_RRO_MSDU_PG, val);
+		break;
+	default:
+		if (dev->wlan.hw_rro)
+			dev_err(dev->hw->dev, "rx_pg_ring num %u is not valid\n",
+				dev->wlan.pg_ring_num);
+		break;
+	}
 
 	/* RRO_MSDU_PG_RING2_CFG1_FLD_DRV_EN should be enabled after
 	 * WM FWDL completed, otherwise RRO_MSDU_PG ring may broken
@@ -2399,9 +2445,7 @@ mtk_wed_attach(struct mtk_wed_device *dev)
 	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
 			 "mtk_wed_attach without holding the RCU read lock");
 
-	if ((dev->wlan.bus_type == MTK_WED_BUS_PCIE &&
-	     pci_domain_nr(dev->wlan.pci_dev->bus) > 1) ||
-	    !try_module_get(THIS_MODULE))
+	if (!try_module_get(THIS_MODULE))
 		ret = -ENODEV;
 
 	rcu_read_unlock();
@@ -2464,7 +2508,7 @@ mtk_wed_attach(struct mtk_wed_device *dev)
 		ret = mtk_wed_wo_init(hw);
 out:
 	if (ret) {
-		dev_err(dev->hw->dev, "failed to attach wed device\n");
+		dev_err(dev->hw->dev, "failed to attach wed device: %d\n", ret);
 		__mtk_wed_detach(dev);
 	}
 unlock:

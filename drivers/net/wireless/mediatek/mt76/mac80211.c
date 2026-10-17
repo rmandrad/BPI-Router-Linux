@@ -224,8 +224,12 @@ static int mt76_led_init(struct mt76_phy *phy)
 		of_node_put(np);
 	}
 
-	snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s",
-		 wiphy_name(hw->wiphy));
+	if (hw->wiphy->n_radio > 1)
+		snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s-%u",
+			 wiphy_name(hw->wiphy), phy->band_idx);
+	else
+		snprintf(phy->leds.name, sizeof(phy->leds.name), "mt76-%s",
+			 wiphy_name(hw->wiphy));
 
 	phy->leds.cdev.name = phy->leds.name;
 	/* The throughput trigger is created once per ieee80211_hw. Under

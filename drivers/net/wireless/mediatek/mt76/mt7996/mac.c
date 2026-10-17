@@ -16,7 +16,7 @@
 static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 					    u16 idx, u8 band_idx)
 {
-	struct mt7996_sta_link *msta_link;
+	struct mt7996_sta_link *msta_link, *link = NULL;
 	struct mt7996_sta *msta;
 	struct mt7996_vif *mvif;
 	struct mt76_wcid *wcid;
@@ -48,11 +48,11 @@ static struct mt76_wcid *mt7996_rx_get_wcid(struct mt7996_dev *dev,
 		if (mlink->band_idx != band_idx)
 			continue;
 
-		msta_link = mt7996_sta_link(msta, i);
+		link = mt7996_sta_link(msta, i);
 		break;
 	}
 
-	return &msta_link->wcid;
+	return link ? &link->wcid : NULL;
 }
 
 bool mt7996_mac_wtbl_update(struct mt7996_dev *dev, int idx, u32 mask)
@@ -168,7 +168,10 @@ static void mt7996_mac_sta_poll(struct mt7996_dev *dev)
 		rssi[2] = to_rssi(GENMASK(23, 16), val);
 		rssi[3] = to_rssi(GENMASK(31, 24), val);
 
-		mlink = rcu_dereference(msta->vif->mt76.link[wcid->link_id]);
+		if (wcid->link_id < ARRAY_SIZE(msta->vif->mt76.link))
+			mlink = rcu_dereference(msta->vif->mt76.link[wcid->link_id]);
+		else
+			mlink = NULL;
 		if (mlink) {
 			struct mt76_phy *mphy = mt76_vif_link_phy(mlink);
 
@@ -722,11 +725,15 @@ static void
 mt7996_mac_write_txwi_8023(struct mt7996_dev *dev, __le32 *txwi,
 			   struct sk_buff *skb, struct mt76_wcid *wcid)
 {
+	struct ethhdr *eth = (struct ethhdr *)skb->data;
 	u8 tid = skb->priority & IEEE80211_QOS_CTL_TID_MASK;
 	u8 fc_type, fc_stype;
 	u16 ethertype;
+	bool multicast;
 	bool wmm = false;
 	u32 val;
+
+	multicast = is_multicast_ether_addr(eth->h_dest);
 
 	if (wcid->sta) {
 		struct ieee80211_sta *sta = wcid_to_sta(wcid);
@@ -740,6 +747,8 @@ mt7996_mac_write_txwi_8023(struct mt7996_dev *dev, __le32 *txwi,
 	ethertype = get_unaligned_be16(&skb->data[12]);
 	if (ethertype >= ETH_P_802_3_MIN)
 		val |= MT_TXD1_ETH_802_3;
+	if (multicast)
+		val |= MT_TXD1_FIXED_RATE;
 
 	txwi[1] |= cpu_to_le32(val);
 
@@ -751,7 +760,10 @@ mt7996_mac_write_txwi_8023(struct mt7996_dev *dev, __le32 *txwi,
 
 	txwi[2] |= cpu_to_le32(val);
 
-	if (wcid->amsdu)
+	if (multicast)
+		txwi[3] |= cpu_to_le32(MT_TXD3_BCM);
+
+	if (wcid->amsdu && !multicast)
 		txwi[3] |= cpu_to_le32(MT_TXD3_HW_AMSDU);
 }
 
@@ -916,7 +928,7 @@ void mt7996_mac_write_txwi(struct mt7996_dev *dev, __le32 *txwi,
 	if (mvif) {
 		if (wcid->offchannel)
 			mlink = rcu_dereference(mvif->mt76.offchannel_link);
-		if (!mlink && link_id != IEEE80211_LINK_UNSPECIFIED)
+		if (!mlink && link_id < ARRAY_SIZE(mvif->mt76.link))
 			mlink = rcu_dereference(mvif->mt76.link[link_id]);
 	}
 
@@ -989,9 +1001,17 @@ void mt7996_mac_write_txwi(struct mt7996_dev *dev, __le32 *txwi,
 		mt7996_mac_write_txwi_80211(dev, txwi, skb, key, wcid);
 
 	if (txwi[1] & cpu_to_le32(MT_TXD1_FIXED_RATE)) {
-		bool mcast = ieee80211_is_data(hdr->frame_control) &&
-			     is_multicast_ether_addr(hdr->addr1);
+		bool mcast;
 		u8 idx = MT7996_BASIC_RATES_TBL;
+
+		if (is_8023) {
+			struct ethhdr *eth = (struct ethhdr *)skb->data;
+
+			mcast = is_multicast_ether_addr(eth->h_dest);
+		} else {
+			mcast = ieee80211_is_data(hdr->frame_control) &&
+				is_multicast_ether_addr(hdr->addr1);
+		}
 
 		if (mlink) {
 			if (mcast && mlink->mcast_rates_idx)
@@ -1047,6 +1067,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	struct mt76_txwi_cache *t;
 	int id, i, pid, nbuf = tx_info->nbuf - 1;
 	bool is_8023 = info->flags & IEEE80211_TX_CTL_HW_80211_ENCAP;
+	bool wake = false;
 	__le32 *ptr = (__le32 *)txwi_ptr;
 	u8 *txwi = (u8 *)txwi_ptr;
 	u8 link_id;
@@ -1079,7 +1100,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 
 			if (msta_link)
 				wcid = &msta_link->wcid;
-		} else if (mvif) {
+		} else if (mvif && link_id < ARRAY_SIZE(mvif->mt76.link)) {
 			mlink = rcu_dereference(mvif->mt76.link[link_id]);
 			if (mlink && mlink->wcid)
 				wcid = mlink->wcid;
@@ -1097,10 +1118,14 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	 * compatible with 802.11 EAPOL frame, we do the translation by
 	 * software
 	 */
-	if (tx_info->skb->protocol == cpu_to_be16(ETH_P_PAE) && sta->mlo) {
+	if (tx_info->skb->protocol == cpu_to_be16(ETH_P_PAE) &&
+	    sta && sta->mlo) {
 		struct ieee80211_hdr *hdr = (void *)tx_info->skb->data;
 		struct ieee80211_bss_conf *link_conf;
 		struct ieee80211_link_sta *link_sta;
+
+		if (!vif || wcid->link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
+			goto error_release_token;
 
 		link_conf = rcu_dereference(vif->link_conf[wcid->link_id]);
 		if (!link_conf)
@@ -1197,7 +1222,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 		if (mvif) {
 			if (wcid->offchannel)
 				mlink = rcu_dereference(mvif->mt76.offchannel_link);
-			if (!mlink)
+			if (!mlink && wcid->link_id < ARRAY_SIZE(mvif->mt76.link))
 				mlink = rcu_dereference(mvif->mt76.link[wcid->link_id]);
 
 			txp->fw.bss_idx = mlink ? mlink->idx : mvif->deflink.mt76.idx;
@@ -1217,7 +1242,10 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	return 0;
 
 error_release_token:
-	mt76_token_release(mdev, id, NULL);
+	mt76_token_release(mdev, id, &wake);
+	if (wake)
+		mt76_set_tx_blocked(mdev, false);
+
 	return -EINVAL;
 }
 
@@ -1398,6 +1426,9 @@ mt7996_mac_tx_free(struct mt7996_dev *dev, void *data, int len)
 				link_sta = NULL;
 				goto next;
 			}
+
+			if (wcid->link_id >= IEEE80211_MLD_MAX_NUM_LINKS)
+				goto next;
 
 			link_sta = rcu_dereference(sta->link[wcid->link_id]);
 			if (!link_sta)
@@ -1949,7 +1980,7 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
 		u32 info = 0, data;
 		u8 signature;
 		void *buf;
-		bool ls;
+		bool ls, added;
 
 		seq_num = FIELD_GET(MT996_RRO_SN_MASK, start_seq + i);
 		e = mt7996_rro_addr_elem_get(dev, seq_id, seq_num);
@@ -2020,33 +2051,39 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
 			ls = FIELD_GET(RRO_HIF_DATA1_LS_MASK,
 				       le32_to_cpu(rxd->data1));
 			if (q->rx_head) {
-				/* TODO: Take into account non-linear skb. */
-				mt76_put_page_pool_buf(buf, false);
-				if (ls) {
-					dev_kfree_skb(q->rx_head);
-					q->rx_head = NULL;
-				}
-				goto next_page;
-			}
+				/* Continuation segment of an in-progress
+				 * reassembly: append as an skb frag. No
+				 * rx_check here -- matches the established
+				 * convention (see mt76_dma_rx_process) that
+				 * rx_check only runs on the last segment,
+				 * which carries the trailing per-packet
+				 * status.
+				 */
+				skb = q->rx_head;
+				added = mt76_add_rx_frag(q, buf, len, false);
+			} else {
+				if (ls && !mt7996_rx_check(mdev, buf, len))
+					goto next_page;
 
-			if (ls && !mt7996_rx_check(mdev, buf, len))
-				goto next_page;
+				skb = build_skb(buf, q->buf_size);
+				if (!skb)
+					goto next_page;
 
-			skb = build_skb(buf, q->buf_size);
-			if (!skb)
-				goto next_page;
-
-			skb_reserve(skb, q->buf_offset);
-			skb_mark_for_recycle(skb);
-			__skb_put(skb, len);
-
-			if (ind_reason == 1 || ind_reason == 2) {
-				dev_kfree_skb(skb);
-				goto next_page;
+				skb_reserve(skb, q->buf_offset);
+				skb_mark_for_recycle(skb);
+				__skb_put(skb, len);
+				added = true;
 			}
 
 			if (!ls) {
 				q->rx_head = skb;
+				goto next_page;
+			}
+
+			q->rx_head = NULL;
+
+			if (!added || ind_reason == 1 || ind_reason == 2) {
+				dev_kfree_skb(skb);
 				goto next_page;
 			}
 

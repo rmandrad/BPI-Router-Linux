@@ -4731,7 +4731,8 @@ static bool ieee80211_tx_8023(struct ieee80211_sub_if_data *sdata,
 
 static void ieee80211_8023_xmit(struct ieee80211_sub_if_data *sdata,
 				struct net_device *dev, struct sta_info *sta,
-				struct ieee80211_key *key, struct sk_buff *skb)
+				struct ieee80211_key *key, struct sk_buff *skb,
+				int link_id)
 {
 	struct ieee80211_tx_info *info;
 	struct ieee80211_local *local = sdata->local;
@@ -4797,6 +4798,8 @@ static void ieee80211_8023_xmit(struct ieee80211_sub_if_data *sdata,
 
 	info->flags |= IEEE80211_TX_CTL_HW_80211_ENCAP;
 	info->control.vif = &sdata->vif;
+	info->control.flags |= u32_encode_bits(link_id,
+					       IEEE80211_TX_CTRL_MLO_LINK);
 
 	if (key)
 		info->control.hw_key = &key->conf;
@@ -4832,24 +4835,114 @@ out_free:
 	kfree_skb(skb);
 }
 
+static struct ieee80211_sub_if_data *
+ieee80211_mcast_offload_bss(struct ieee80211_sub_if_data *sdata)
+{
+	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
+		return container_of(sdata->bss, struct ieee80211_sub_if_data,
+				    u.ap);
+
+	return sdata;
+}
+
 static bool ieee80211_check_mcast_offload(struct ieee80211_sub_if_data *sdata,
 					  struct sk_buff *skb)
 {
+	struct ieee80211_sub_if_data *bss = sdata;
 	struct ethhdr *ehdr = (struct ethhdr *)skb->data;
 
-	if ((ieee80211_vif_is_mld(&sdata->vif) &&
-	     (sdata->vif.type == NL80211_IFTYPE_AP &&
-	      !ieee80211_hw_check(&sdata->local->hw, MLO_MCAST_MULTI_LINK_TX))) ||
-	    (sdata->vif.type == NL80211_IFTYPE_AP_VLAN &&
-	     !sdata->wdev.use_4addr))
-		return false;
+	if (sdata->vif.type == NL80211_IFTYPE_AP_VLAN) {
+		if (!sdata->bss || !sdata->wdev.use_4addr)
+			return false;
+
+		bss = ieee80211_mcast_offload_bss(sdata);
+	}
 
 	if (!is_multicast_ether_addr(skb->data) ||
-	    !(sdata->vif.offload_flags & IEEE80211_OFFLOAD_ENCAP_MCAST) ||
+	    !(bss->vif.offload_flags & IEEE80211_OFFLOAD_ENCAP_MCAST) ||
 	    sdata->control_port_protocol == ehdr->h_proto)
 		return false;
 
 	return true;
+}
+
+static struct ieee80211_key *
+ieee80211_mcast_8023_key(struct ieee80211_sub_if_data *sdata, int link_id)
+{
+	struct ieee80211_link_data *link;
+
+	if (link_id == IEEE80211_LINK_UNSPECIFIED) {
+		link = &sdata->deflink;
+	} else {
+		link = rcu_dereference(sdata->link[link_id]);
+		if (!link)
+			return ERR_PTR(-ENOLINK);
+	}
+
+	return rcu_dereference(link->default_multicast_key);
+}
+
+static bool ieee80211_mcast_8023_key_usable(struct ieee80211_key *key)
+{
+	if (IS_ERR(key))
+		return false;
+
+	return !key || ((key->flags & KEY_FLAG_UPLOADED_TO_HARDWARE) &&
+			key->conf.cipher != WLAN_CIPHER_SUITE_TKIP);
+}
+
+/* Fan a multicast 802.3 frame out to every active link of an AP MLD, using
+ * the per-link multicast key. Used when the driver cannot transmit one
+ * multicast frame on all links itself (no MLO_MCAST_MULTI_LINK_TX).
+ */
+static bool
+ieee80211_mlo_mcast_8023_xmit(struct ieee80211_sub_if_data *sdata,
+			      struct net_device *dev, struct sk_buff *skb)
+{
+	struct ieee80211_sub_if_data *bss = ieee80211_mcast_offload_bss(sdata);
+	struct sk_buff_head queue;
+	unsigned long links;
+	unsigned int link_id;
+
+	links = bss->vif.active_links;
+	if (!links)
+		return false;
+
+	__skb_queue_head_init(&queue);
+
+	for_each_set_bit(link_id, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
+		struct ieee80211_key *key;
+		struct sk_buff *out;
+
+		key = ieee80211_mcast_8023_key(bss, link_id);
+		if (!ieee80211_mcast_8023_key_usable(key))
+			goto purge;
+
+		out = skb_copy(skb, GFP_ATOMIC);
+		if (!out)
+			goto purge;
+
+		__skb_queue_tail(&queue, out);
+	}
+
+	for_each_set_bit(link_id, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
+		struct ieee80211_key *key;
+		struct sk_buff *out;
+
+		out = __skb_dequeue(&queue);
+		if (WARN_ON_ONCE(!out))
+			break;
+
+		key = ieee80211_mcast_8023_key(bss, link_id);
+		ieee80211_8023_xmit(sdata, dev, NULL, key, out, link_id);
+	}
+
+	kfree_skb(skb);
+	return true;
+
+purge:
+	__skb_queue_purge(&queue);
+	return false;
 }
 
 static void __ieee80211_subif_start_xmit_8023(struct sk_buff *skb,
@@ -4857,7 +4950,7 @@ static void __ieee80211_subif_start_xmit_8023(struct sk_buff *skb,
 {
 	struct ieee80211_sub_if_data *sdata = IEEE80211_DEV_TO_SUB_IF(dev);
 	struct ethhdr *ehdr = (struct ethhdr *)skb->data;
-	struct ieee80211_link_data *link;
+	struct ieee80211_sub_if_data *bss;
 	struct ieee80211_key *key;
 	struct sta_info *sta;
 
@@ -4884,8 +4977,24 @@ static void __ieee80211_subif_start_xmit_8023(struct sk_buff *skb,
 			kfree_skb(skb);
 			goto out;
 		}
-		link = &sdata->deflink;
-		key = rcu_dereference(link->default_multicast_key);
+
+		bss = ieee80211_mcast_offload_bss(sdata);
+
+		/* An AP MLD without native multi-link multicast TX gets one
+		 * copy per active link, each with its own link key.
+		 */
+		if (ieee80211_vif_is_mld(&bss->vif) &&
+		    !ieee80211_hw_check(&bss->local->hw,
+					MLO_MCAST_MULTI_LINK_TX)) {
+			if (ieee80211_mlo_mcast_8023_xmit(sdata, dev, skb))
+				goto out;
+			goto skip_offload;
+		}
+
+		key = ieee80211_mcast_8023_key(bss,
+					       IEEE80211_LINK_UNSPECIFIED);
+		if (!ieee80211_mcast_8023_key_usable(key))
+			goto skip_offload;
 	} else if (unlikely(IS_ERR_OR_NULL(sta) || !sta->uploaded ||
 		   !test_sta_flag(sta, WLAN_STA_AUTHORIZED))) {
 		goto skip_offload;
@@ -4900,7 +5009,8 @@ static void __ieee80211_subif_start_xmit_8023(struct sk_buff *skb,
 		goto skip_offload;
 
 	sk_pacing_shift_update(skb->sk, sdata->local->hw.tx_sk_pacing_shift);
-	ieee80211_8023_xmit(sdata, dev, sta, key, skb);
+	ieee80211_8023_xmit(sdata, dev, sta, key, skb,
+			    IEEE80211_LINK_UNSPECIFIED);
 	goto out;
 
 skip_offload:

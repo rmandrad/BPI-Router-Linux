@@ -155,6 +155,7 @@ struct mtk_wed_device {
 		bool hw_rro;
 		bool msi;
 		bool hif2;
+		bool fc_disable;
 
 		u16 token_start;
 		unsigned int nbuf;
@@ -169,6 +170,7 @@ struct mtk_wed_device {
 		u8 rx_pg_tbit[MTK_WED_RX_PAGE_QUEUES];
 		u8 txfree_tbit;
 		u8 amsdu_max_subframes;
+		u8 pg_ring_num;
 
 		struct {
 			u8 se_group_nums;
