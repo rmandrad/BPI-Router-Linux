@@ -868,8 +868,8 @@ void mt76_reset_device(struct mt76_dev *dev)
 			continue;
 
 		wcid->sta = 0;
-		mt76_wcid_cleanup(dev, wcid);
 		rcu_assign_pointer(dev->wcid[i], NULL);
+		mt76_wcid_cleanup(dev, wcid);
 	}
 	rcu_read_unlock();
 
@@ -1756,9 +1756,8 @@ void mt76_wcid_cleanup(struct mt76_dev *dev, struct mt76_wcid *wcid)
 
 	mt76_tx_status_lock(dev, &list);
 	mt76_tx_status_skb_get(dev, wcid, -1, &list);
-	mt76_tx_status_unlock(dev, &list);
-
 	idr_destroy(&wcid->pktid);
+	mt76_tx_status_unlock(dev, &list);
 
 	/* Remove from sta_poll_list to prevent list corruption after reset.
 	 * Without this, mt76_reset_device() reinitializes sta_poll_list but
@@ -2119,7 +2118,7 @@ void mt76_vif_cleanup(struct mt76_dev *dev, struct ieee80211_vif *vif)
 
 	rcu_assign_pointer(mvif->link[0], NULL);
 	mt76_abort_scan(dev);
-	if (mvif->roc_phy)
+	if (mvif->roc_phy && mvif->roc_phy->roc_vif == vif)
 		mt76_abort_roc(mvif->roc_phy);
 }
 EXPORT_SYMBOL_GPL(mt76_vif_cleanup);

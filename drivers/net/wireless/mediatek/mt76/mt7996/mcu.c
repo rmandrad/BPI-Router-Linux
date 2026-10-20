@@ -1518,15 +1518,15 @@ mt7996_mcu_sta_ba(struct mt7996_dev *dev, struct mt76_vif_link *mvif,
 /** starec & wtbl **/
 int mt7996_mcu_add_tx_ba(struct mt7996_dev *dev,
 			 struct ieee80211_ampdu_params *params,
-			 struct ieee80211_vif *vif, bool enable)
+			 struct ieee80211_vif *vif, unsigned long links,
+			 bool enable)
 {
 	struct ieee80211_sta *sta = params->sta;
 	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
-	struct ieee80211_link_sta *link_sta;
 	unsigned int link_id;
 	int ret = 0;
 
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_set_bit(link_id, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
 		struct mt7996_sta_link *msta_link;
 		struct mt7996_vif_link *link;
 
@@ -1552,15 +1552,15 @@ int mt7996_mcu_add_tx_ba(struct mt7996_dev *dev,
 
 int mt7996_mcu_add_rx_ba(struct mt7996_dev *dev,
 			 struct ieee80211_ampdu_params *params,
-			 struct ieee80211_vif *vif, bool enable)
+			 struct ieee80211_vif *vif, unsigned long links,
+			 bool enable)
 {
 	struct ieee80211_sta *sta = params->sta;
 	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
-	struct ieee80211_link_sta *link_sta;
 	unsigned int link_id;
 	int ret = 0;
 
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_set_bit(link_id, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
 		struct mt7996_sta_link *msta_link;
 		struct mt7996_vif_link *link;
 
@@ -2766,17 +2766,19 @@ mt7996_mcu_sta_mld_setup_tlv(struct mt7996_dev *dev, struct sk_buff *skb,
 			     struct ieee80211_sta *sta)
 {
 	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
-	unsigned int nlinks = hweight16(sta->valid_links);
+	unsigned long links = mt7996_mac_sta_links(dev, vif, sta);
+	unsigned int nlinks = hweight16(links);
 	struct mld_setup_link *mld_setup_link;
-	struct ieee80211_link_sta *link_sta;
 	struct sta_rec_mld_setup *mld_setup;
 	struct mt7996_sta_link *msta_link;
+	u8 seclink_id = msta->deflink_id;
 	unsigned int link_id;
 	struct tlv *tlv;
 
-	msta_link = mt7996_sta_link_protected(dev, msta, msta->deflink_id);
-	if (!msta_link)
+	if (!(links & BIT(msta->deflink_id)))
 		return;
+
+	msta_link = mt7996_sta_link_protected(dev, msta, msta->deflink_id);
 
 	tlv = mt76_connac_mcu_add_tlv(skb, STA_REC_MLD,
 				      sizeof(struct sta_rec_mld_setup) +
@@ -2787,26 +2789,18 @@ mt7996_mcu_sta_mld_setup_tlv(struct mt7996_dev *dev, struct sk_buff *skb,
 	mld_setup->setup_wcid = cpu_to_le16(msta_link->wcid.idx);
 	mld_setup->primary_id = cpu_to_le16(msta_link->wcid.idx);
 
-	if (nlinks > 1) {
-		msta_link = mt7996_sta_link_protected(dev, msta,
-						      msta->seclink_id);
-		if (!msta_link)
-			return;
-	}
+	if (links & BIT(msta->seclink_id))
+		seclink_id = msta->seclink_id;
+	msta_link = mt7996_sta_link_protected(dev, msta, seclink_id);
 	mld_setup->seconed_id = cpu_to_le16(msta_link->wcid.idx);
 	mld_setup->link_num = nlinks;
 
 	mld_setup_link = (struct mld_setup_link *)mld_setup->link_info;
-	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+	for_each_set_bit(link_id, &links, IEEE80211_MLD_MAX_NUM_LINKS) {
 		struct mt7996_vif_link *link;
 
 		msta_link = mt7996_sta_link_protected(dev, msta, link_id);
-		if (!msta_link)
-			continue;
-
 		link = mt7996_vif_link(dev, vif, link_id);
-		if (!link)
-			continue;
 
 		mld_setup_link->wcid = cpu_to_le16(msta_link->wcid.idx);
 		mld_setup_link->bss_idx = link->mt76.idx;
@@ -2918,6 +2912,27 @@ int mt7996_mcu_teardown_mld_sta(struct mt7996_dev *dev,
 		return PTR_ERR(skb);
 
 	mt76_connac_mcu_add_tlv(skb, STA_REC_MLD_OFF, sizeof(struct tlv));
+
+	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
+				     MCU_WMWA_UNI_CMD(STA_REC_UPDATE), true);
+}
+
+int mt7996_mcu_update_mld_sta(struct mt7996_dev *dev,
+			      struct ieee80211_vif *vif,
+			      struct ieee80211_sta *sta,
+			      struct mt7996_vif_link *link,
+			      struct mt7996_sta_link *msta_link)
+{
+	struct sk_buff *skb;
+
+	skb = __mt76_connac_mcu_alloc_sta_req(&dev->mt76, &link->mt76,
+					      &msta_link->wcid,
+					      MT7996_STA_UPDATE_MAX_SIZE);
+	if (IS_ERR(skb))
+		return PTR_ERR(skb);
+
+	mt7996_mcu_sta_mld_setup_tlv(dev, skb, vif, sta);
+	mt7996_mcu_sta_eht_mld_tlv(dev, skb, sta);
 
 	return mt76_mcu_skb_send_msg(&dev->mt76, skb,
 				     MCU_WMWA_UNI_CMD(STA_REC_UPDATE), true);
