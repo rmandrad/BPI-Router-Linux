@@ -888,16 +888,11 @@ struct mt76_phy *mt76_vif_phy(struct ieee80211_hw *hw,
 			      struct ieee80211_vif *vif)
 {
 	struct mt76_vif_link *mlink = (struct mt76_vif_link *)vif->drv_priv;
-	struct mt76_chanctx *ctx;
 
 	if (!hw->wiphy->n_radio)
 		return hw->priv;
 
-	if (!mlink->ctx)
-		return NULL;
-
-	ctx = (struct mt76_chanctx *)mlink->ctx->drv_priv;
-	return ctx->phy;
+	return mt76_vif_link_phy(mlink);
 }
 EXPORT_SYMBOL_GPL(mt76_vif_phy);
 
@@ -1212,15 +1207,9 @@ void mt76_wcid_key_setup(struct mt76_dev *dev, struct mt76_wcid *wcid,
 	struct ieee80211_key_seq seq;
 	int i;
 
-	wcid->rx_check_pn = false;
-
-	if (!key)
+	mt76_wcid_key_link_setup(wcid, key);
+	if (!wcid->rx_check_pn)
 		return;
-
-	if (key->cipher != WLAN_CIPHER_SUITE_CCMP)
-		return;
-
-	wcid->rx_check_pn = true;
 
 	/* data frame */
 	for (i = 0; i < IEEE80211_NUM_TIDS; i++) {
@@ -1328,6 +1317,7 @@ mt76_check_ccmp_pn(struct sk_buff *skb)
 	struct mt76_rx_status *status = (struct mt76_rx_status *)skb->cb;
 	struct mt76_wcid *wcid = status->wcid;
 	struct ieee80211_hdr *hdr;
+	struct mt76_wcid *pn_wcid;
 	int security_idx;
 	int ret;
 
@@ -1339,6 +1329,9 @@ mt76_check_ccmp_pn(struct sk_buff *skb)
 
 	if (!wcid || !wcid->rx_check_pn)
 		return;
+
+	/* the links of an MLD peer share one PN space per key */
+	pn_wcid = mt76_wcid_primary(wcid);
 
 	security_idx = status->qos_ctl & IEEE80211_QOS_CTL_TID_MASK;
 	if (status->flag & RX_FLAG_8023)
@@ -1367,14 +1360,14 @@ mt76_check_ccmp_pn(struct sk_buff *skb)
 
 skip_hdr_check:
 	BUILD_BUG_ON(sizeof(status->iv) != sizeof(wcid->rx_key_pn[0]));
-	ret = memcmp(status->iv, wcid->rx_key_pn[security_idx],
+	ret = memcmp(status->iv, pn_wcid->rx_key_pn[security_idx],
 		     sizeof(status->iv));
 	if (ret <= 0) {
 		status->flag |= RX_FLAG_ONLY_MONITOR;
 		return;
 	}
 
-	memcpy(wcid->rx_key_pn[security_idx], status->iv, sizeof(status->iv));
+	memcpy(pn_wcid->rx_key_pn[security_idx], status->iv, sizeof(status->iv));
 
 	if (status->flag & RX_FLAG_IV_STRIPPED)
 		status->flag |= RX_FLAG_PN_VALIDATED;
@@ -2238,7 +2231,7 @@ mt76_offchannel_notify_iter(void *_data, u8 *mac, struct ieee80211_vif *vif)
 
 	if (!ieee80211_vif_is_mld(vif)) {
 		if (mt76_vif_link_phy(mlink) == data->phy) {
-			if (!data->offchannel && mlink->beacon_mon_interval)
+			if (!data->offchannel && READ_ONCE(mlink->beacon_mon_interval))
 				WRITE_ONCE(mlink->beacon_mon_last, jiffies);
 			mt76_offchannel_send_nullfunc(data, vif, -1);
 		}
@@ -2255,7 +2248,7 @@ mt76_offchannel_notify_iter(void *_data, u8 *mac, struct ieee80211_vif *vif)
 		if (mt76_vif_link_phy(mlink) != data->phy)
 			continue;
 
-		if (!data->offchannel && mlink->beacon_mon_interval)
+		if (!data->offchannel && READ_ONCE(mlink->beacon_mon_interval))
 			WRITE_ONCE(mlink->beacon_mon_last, jiffies);
 
 		mt76_offchannel_send_nullfunc(data, vif, link_id);
@@ -2303,7 +2296,7 @@ static void mt76_rx_beacon_iter(void *_data, u8 *mac,
 			mlink = (struct mt76_vif_link *)vif->drv_priv;
 		else
 			mlink = rcu_dereference(mvif->link[link_id]);
-		if (!mlink || !mlink->beacon_mon_interval)
+		if (!mlink || !READ_ONCE(mlink->beacon_mon_interval))
 			continue;
 
 		if (mt76_vif_link_phy(mlink) != data->phy)
@@ -2358,11 +2351,20 @@ static void mt76_beacon_mon_iter(void *data, u8 *mac,
 		return;
 
 	for (link_id = 0; link_id < IEEE80211_MLD_MAX_NUM_LINKS; link_id++) {
+		u16 interval;
+
 		if (link_id == mvif->deflink_id)
 			mlink = (struct mt76_vif_link *)vif->drv_priv;
 		else
 			mlink = rcu_dereference(mvif->link[link_id]);
-		if (!mlink || !mlink->beacon_mon_interval)
+		if (!mlink)
+			continue;
+
+		/* pairs with smp_store_release() in
+		 * mt76_vif_link_beacon_mon_start()
+		 */
+		interval = smp_load_acquire(&mlink->beacon_mon_interval);
+		if (!interval)
 			continue;
 
 		if (mt76_vif_link_phy(mlink) != phy)
@@ -2370,7 +2372,7 @@ static void mt76_beacon_mon_iter(void *data, u8 *mac,
 
 		if (time_after(jiffies,
 			       READ_ONCE(mlink->beacon_mon_last) +
-			       MT76_BEACON_MON_MAX_MISS * mlink->beacon_mon_interval))
+			       MT76_BEACON_MON_MAX_MISS * interval))
 			ieee80211_beacon_loss(vif);
 	}
 }

@@ -276,6 +276,8 @@ struct mt7996_sta {
 	u8 deflink_id;
 	u8 seclink_id;
 	u8 conn_state;
+	u16 peer_mld_links;
+	u16 fw_mld_idx;
 
 	unsigned long wcid_flags;
 
@@ -295,6 +297,8 @@ struct mt7996_vif_link {
 
 	u8 mld_idx;
 	u8 bmc_bssid[ETH_ALEN];
+	bool bmc_sta_added;
+	bool csa_bcn_uploaded;
 };
 
 struct mt7996_vif_link_info {
@@ -416,6 +420,7 @@ struct mt7996_phy {
 	bool has_aux_rx;
 	bool counter_reset;
 	bool rdd_tx_paused;
+	bool offchan_bcn_stopped;
 };
 
 struct mt7996_dev {
@@ -738,6 +743,8 @@ int mt7996_mcu_add_sta(struct mt7996_dev *dev,
 		       struct mt7996_vif_link *link,
 		       struct mt7996_sta_link *msta_link,
 		       int conn_state, bool newly);
+int mt7996_mcu_set_peer_mld(struct mt7996_dev *dev, struct ieee80211_vif *vif,
+			    struct ieee80211_sta *sta);
 int mt7996_mcu_teardown_mld_sta(struct mt7996_dev *dev,
 				struct mt7996_vif_link *link,
 				struct mt7996_sta_link *msta_link);
@@ -771,6 +778,7 @@ int mt7996_mcu_add_rate_ctrl(struct mt7996_dev *dev, struct mt7996_sta *msta,
 			     bool changed);
 int mt7996_set_channel(struct mt76_phy *mphy);
 int mt7996_mcu_set_chan_info(struct mt7996_phy *phy, u16 tag);
+int mt7996_mcu_set_punct(struct mt7996_phy *phy);
 int mt7996_mcu_set_tx(struct mt7996_dev *dev, struct ieee80211_vif *vif,
 		      struct ieee80211_bss_conf *link_conf);
 int mt7996_mcu_set_fixed_rate_ctrl(struct mt7996_dev *dev,

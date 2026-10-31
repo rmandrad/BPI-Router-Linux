@@ -863,7 +863,8 @@ mt7996_mac_write_txwi_80211(struct mt7996_dev *dev, __le32 *txwi,
 	}
 
 	if (vif && ieee80211_vif_is_mld(vif) &&
-	    (multicast || unlikely(skb->protocol == cpu_to_be16(ETH_P_PAE))))
+	    (multicast || unlikely(skb->protocol == cpu_to_be16(ETH_P_PAE)) ||
+	     (ieee80211_is_mgmt(fc) && wcid->sta)))
 		txwi[5] |= cpu_to_le32(MT_TXD5_FL);
 
 	if (ieee80211_is_nullfunc(fc) && ieee80211_has_a4(fc) &&
@@ -1083,6 +1084,9 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 		u8 tid = tx_info->skb->priority & IEEE80211_QOS_CTL_TID_MASK;
 
 		link_id = (tid % 2) ? msta->seclink_id : msta->deflink_id;
+	} else if (is_8023) {
+		/* mac80211 does not set the MLO link of an 802.3 frame */
+		link_id = IEEE80211_LINK_UNSPECIFIED;
 	} else {
 		link_id = u32_get_bits(info->control.flags,
 				       IEEE80211_TX_CTRL_MLO_LINK);
@@ -2281,6 +2285,7 @@ void mt7996_mac_update_beacons(struct mt7996_phy *phy)
 	ieee80211_iterate_active_interfaces(phy->mt76->hw,
 					    IEEE80211_IFACE_ITER_RESUME_ALL,
 					    mt7996_update_vif_beacon, phy);
+	phy->offchan_bcn_stopped = phy->mt76->offchannel;
 }
 
 static void
@@ -2519,8 +2524,10 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
 	if (i == 10)
 		dev_err(dev->mt76.dev, "chip full reset failed\n");
 
-	mt7996_for_each_phy(dev, phy)
+	mt7996_for_each_phy(dev, phy) {
 		phy->omac_mask = 0;
+		phy->rxfilter |= MT_WF_RFCR_DROP_OTHER_UC;
+	}
 	dev->mld_idx_mask = 0;
 	dev->mld_remap_idx_mask = 0;
 
