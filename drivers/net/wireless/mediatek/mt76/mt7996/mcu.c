@@ -1663,6 +1663,18 @@ mt7996_mcu_sta_he_6g_tlv(struct sk_buff *skb,
 	he_6g->capa = link_sta->he_6ghz_capa.capa;
 }
 
+static bool
+mt7996_mcu_sta_eht_20mhz_only(struct ieee80211_vif *vif,
+			      struct ieee80211_link_sta *link_sta)
+{
+	return vif->type != NL80211_IFTYPE_STATION &&
+	       (link_sta->he_cap.he_cap_elem.phy_cap_info[0] &
+		(IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G |
+		 IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G |
+		 IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_160MHZ_IN_5G |
+		 IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_80PLUS80_MHZ_IN_5G)) == 0;
+}
+
 static void
 mt7996_mcu_sta_eht_tlv(struct sk_buff *skb,
 		       struct ieee80211_link_sta *link_sta)
@@ -1689,12 +1701,7 @@ mt7996_mcu_sta_eht_tlv(struct sk_buff *skb,
 	eht->phy_cap = cpu_to_le64(*(u64 *)elem->phy_cap_info);
 	eht->phy_cap_ext = cpu_to_le64(elem->phy_cap_info[8]);
 
-	if (vif->type != NL80211_IFTYPE_STATION &&
-	    (link_sta->he_cap.he_cap_elem.phy_cap_info[0] &
-	     (IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_IN_2G |
-	      IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_40MHZ_80MHZ_IN_5G |
-	      IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_160MHZ_IN_5G |
-	      IEEE80211_HE_PHY_CAP0_CHANNEL_WIDTH_SET_80PLUS80_MHZ_IN_5G)) == 0) {
+	if (mt7996_mcu_sta_eht_20mhz_only(vif, link_sta)) {
 		memcpy(eht->mcs_map_bw20, &mcs_map->only_20mhz,
 		       sizeof(eht->mcs_map_bw20));
 		return;
@@ -2029,6 +2036,7 @@ mt7996_mcu_sta_bfer_he(struct ieee80211_link_sta *link_sta,
 		     pe->phy_cap_info[4]);
 
 	bf->nrow_gt_bw80 = min_t(int, snd_dim, sts);
+	bf->ncol_gt_bw80 = min_t(u8, bf->ncol_gt_bw80, bf->nrow_gt_bw80);
 }
 
 static void
@@ -2039,11 +2047,9 @@ mt7996_mcu_sta_bfer_eht(struct ieee80211_link_sta *link_sta,
 	struct ieee80211_sta_eht_cap *pc = &link_sta->eht_cap;
 	struct ieee80211_eht_cap_elem_fixed *pe = &pc->eht_cap_elem;
 	struct ieee80211_eht_mcs_nss_supp *eht_nss = &pc->eht_mcs_nss_supp;
-	u8 nss_mcs = u8_get_bits(eht_nss->bw._80.rx_tx_mcs9_max_nss,
-				 IEEE80211_EHT_MCS_NSS_RX);
 	const struct ieee80211_eht_cap_elem_fixed *ve;
 	const struct ieee80211_sta_eht_cap *vc;
-	u8 snd_dim, sts;
+	u8 snd_dim, sts, nss_mcs;
 
 	vc = mt76_connac_get_eht_phy_cap(phy->mt76, vif);
 	if (!vc)
@@ -2059,6 +2065,11 @@ mt7996_mcu_sta_bfer_eht(struct ieee80211_link_sta *link_sta,
 	snd_dim = EHT_PHY(CAP2_SOUNDING_DIM_80MHZ_MASK, ve->phy_cap_info[2]);
 	sts = EHT_PHY(CAP0_BEAMFORMEE_SS_80MHZ_MASK, pe->phy_cap_info[0]) +
 	      (EHT_PHY(CAP1_BEAMFORMEE_SS_80MHZ_MASK, pe->phy_cap_info[1]) << 1);
+	if (mt7996_mcu_sta_eht_20mhz_only(vif, link_sta))
+		nss_mcs = eht_nss->only_20mhz.rx_tx_mcs7_max_nss;
+	else
+		nss_mcs = eht_nss->bw._80.rx_tx_mcs9_max_nss;
+	nss_mcs = u8_get_bits(nss_mcs, IEEE80211_EHT_MCS_NSS_RX);
 	nss_mcs = nss_mcs ? nss_mcs - 1 : 0;
 	bf->nrow = min_t(u8, snd_dim, sts);
 	bf->ncol = min_t(u8, nss_mcs, bf->nrow);
@@ -2077,7 +2088,7 @@ mt7996_mcu_sta_bfer_eht(struct ieee80211_link_sta *link_sta,
 		nss_mcs = nss_mcs ? nss_mcs - 1 : 0;
 
 		bf->nrow_gt_bw80 = min_t(u8, snd_dim, sts);
-		bf->ncol_gt_bw80 = nss_mcs;
+		bf->ncol_gt_bw80 = min_t(u8, nss_mcs, bf->nrow_gt_bw80);
 		break;
 	case IEEE80211_STA_RX_BW_320:
 		snd_dim = EHT_PHY(CAP2_SOUNDING_DIM_320MHZ_MASK, ve->phy_cap_info[2]) +
@@ -2088,8 +2099,9 @@ mt7996_mcu_sta_bfer_eht(struct ieee80211_link_sta *link_sta,
 				      IEEE80211_EHT_MCS_NSS_RX);
 		nss_mcs = nss_mcs ? nss_mcs - 1 : 0;
 
-		bf->nrow_gt_bw80 = min_t(u8, snd_dim, sts) << 4;
-		bf->ncol_gt_bw80 = nss_mcs << 4;
+		sts = min_t(u8, snd_dim, sts);
+		bf->nrow_gt_bw80 = sts << 4;
+		bf->ncol_gt_bw80 = min_t(u8, nss_mcs, sts) << 4;
 		break;
 	default:
 		break;
