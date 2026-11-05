@@ -8,6 +8,8 @@
 
 struct dst_entry;
 
+struct xfrm_state;
+
 struct flow_match {
 	struct flow_dissector	*dissector;
 	void			*mask;
@@ -187,6 +189,7 @@ enum flow_action_id {
 	FLOW_ACTION_VLAN_POP_ETH,
 	FLOW_ACTION_CONTINUE,
 	FLOW_ACTION_NPU_ENCAP,
+	FLOW_ACTION_IPSEC_PUSH,
 	NUM_FLOW_ACTIONS,
 };
 
@@ -336,6 +339,12 @@ struct flow_action_entry {
 			u32 npu_entry;
 			struct dst_entry *dst;
 		} npu;
+		struct {				/* FLOW_ACTION_IPSEC_PUSH */
+			/* Not held: only valid while the flow, which pins
+			 * the dst the state hangs off, is being offloaded.
+			 */
+			struct xfrm_state *xs;
+		} ipsec;
 	};
 	struct flow_action_cookie *user_cookie; /* user defined action cookie */
 };

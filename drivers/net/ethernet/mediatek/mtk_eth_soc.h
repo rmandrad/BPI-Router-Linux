@@ -431,6 +431,11 @@
 #define TPORT_EIP197_QDMA		3
 #define TPORT_NPU_QDMA			5
 #define TPORT_NPU_EIP197_QDMA		9
+#define TX_DMA_TPORT_MASK		GENMASK(3, 0)
+
+/* QDMA V2 descriptor txd8 */
+#define TX_DMA_CDRT_MASK		GENMASK(7, 0)
+#define TX_DMA_TOPS_ENTRY_MASK		GENMASK(13, 8)
 /* QDMA V2 descriptor txd4 */
 #define TX_DMA_FPORT_SHIFT_V2	8
 #define TX_DMA_FPORT_MASK_V2	0xf
@@ -517,6 +522,9 @@
 #define RX_DMA_GET_FLUSH_RSN_V2	GENMASK(2, 0)
 #define RX_DMA_GET_AGG_CNT_V2	GENMASK(23, 16)
 #define RX_DMA_GET_TOPS_CRSN(x)	(((x) >> 24) & 0xff)
+
+/* PDMA V2 descriptor rxd7 */
+#define RX_DMA_GET_CDRT(x)	(((x) >> 8) & 0xff)
 
 /* PHY Polling and SMI Master Control registers */
 #define MTK_PPSC		0x10000
@@ -1371,6 +1379,8 @@ struct mtk_tx_dma_desc_info {
 	u32		size;
 	u16		vlan_tci;
 	u16		qid;
+	u8		cdrt;		/* EIP-197 CDRT index (NETSYS v3) */
+	u8		tport;		/* PSE transmit port (NETSYS v3) */
 	u8		gso:1;
 	u8		csum:1;
 	u8		vlan:1;
@@ -1773,6 +1783,13 @@ static inline bool mtk_interface_mode_is_xgmii(struct mtk_eth *eth,
  * the tunnel netdev it belongs to. Set by the npu driver.
  */
 extern struct net_device *(*mtk_get_tnl_dev)(u8 tops_crsn);
+
+/* EIP-197 inline IPsec: called for a received packet with the CDRT index the
+ * hardware stamped into the RX descriptor (0 when the packet was not
+ * decrypted). Set by the crypto-eip-inline driver, which attaches a
+ * CRYPTO_DONE secpath so the xfrm policy check accepts the packet.
+ */
+extern void (*mtk_crypto_set_dec_secpath)(struct sk_buff *skb, u16 cdrt);
 
 void mtk_stats_update_mac(struct mtk_mac *mac);
 

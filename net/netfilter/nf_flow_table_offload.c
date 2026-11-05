@@ -251,6 +251,7 @@ static int flow_offload_eth_src(struct net *net,
 	case FLOW_OFFLOAD_XMIT_DIRECT:
 		addr = this_tuple->out.h_source;
 		break;
+	case FLOW_OFFLOAD_XMIT_XFRM:
 	case FLOW_OFFLOAD_XMIT_NEIGH:
 		other_tuple = &flow->tuplehash[!dir].tuple;
 		dev = dev_get_by_index(net, other_tuple->iifidx);
@@ -304,6 +305,7 @@ static int flow_offload_eth_dst(struct net *net,
 	case FLOW_OFFLOAD_XMIT_DIRECT:
 		ether_addr_copy(ha, this_tuple->out.h_dest);
 		break;
+	case FLOW_OFFLOAD_XMIT_XFRM:
 	case FLOW_OFFLOAD_XMIT_NEIGH:
 		other_tuple = &flow->tuplehash[!dir].tuple;
 		daddr = &other_tuple->src_v4;
@@ -598,6 +600,7 @@ static int flow_offload_redirect(struct net *net,
 		this_tuple = &flow->tuplehash[dir].tuple;
 		ifindex = this_tuple->out.ifidx;
 		break;
+	case FLOW_OFFLOAD_XMIT_XFRM:
 	case FLOW_OFFLOAD_XMIT_NEIGH:
 		other_tuple = &flow->tuplehash[!dir].tuple;
 		ifindex = other_tuple->iifidx;
@@ -646,6 +649,14 @@ static int flow_offload_encap_tunnel(const struct flow_offload *flow,
 			entry->id = FLOW_ACTION_TUNNEL_ENCAP;
 			entry->tunnel = tun_info;
 		}
+	}
+
+	if (dst && dst_xfrm(dst)) {
+		entry = flow_action_entry_next(flow_rule);
+		if (!entry)
+			return -E2BIG;
+		entry->id = FLOW_ACTION_IPSEC_PUSH;
+		entry->ipsec.xs = dst_xfrm(dst);
 	}
 
 	return 0;

@@ -171,6 +171,9 @@
 int (*mtk_flow_tnl_offloadable)(const struct net_device_path *path);
 EXPORT_SYMBOL_GPL(mtk_flow_tnl_offloadable);
 
+int (*mtk_gso_skb_copy_head)(struct sk_buff *new, struct sk_buff *old);
+EXPORT_SYMBOL_GPL(mtk_gso_skb_copy_head);
+
 static DEFINE_SPINLOCK(ptype_lock);
 struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
 
@@ -4111,6 +4114,17 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 		if (IS_ERR(segs)) {
 			goto out_kfree_skb;
 		} else if (segs) {
+			int (*copy_head)(struct sk_buff *new, struct sk_buff *old) =
+				READ_ONCE(mtk_gso_skb_copy_head);
+
+			/* fail closed: a segment that lost its offload
+			 * metadata must not be sent on as plain text
+			 */
+			if (copy_head && copy_head(segs, skb)) {
+				kfree_skb_list(segs);
+				goto out_kfree_skb;
+			}
+
 			consume_skb(skb);
 			skb = segs;
 		}

@@ -10,6 +10,7 @@
 #include <net/flow_offload.h>
 #include <net/pkt_cls.h>
 #include <net/dsa.h>
+#include <net/xfrm.h>
 #include "mtk_eth_soc.h"
 #include "mtk_wed.h"
 
@@ -45,6 +46,9 @@ struct mtk_flow_data {
 		u8 num;
 	} pppoe;
 	u32 npu_entry;
+	struct {
+		u16 cdrt_id;
+	} ipsec;
 };
 
 int (*mtk_flow_offload_get_cdrt)(struct xfrm_state *xs);
@@ -403,12 +407,48 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 			data.pppoe.sid = act->pppoe.sid;
 			data.pppoe.num++;
 			break;
-		case FLOW_ACTION_NPU_ENCAP:
-			/* Tunnel over IPsec needs the EIP-197 xfrm offload. */
-			if (act->npu.dst)
+		case FLOW_ACTION_IPSEC_PUSH:
+			if (!mtk_is_netsys_v3_or_greater(eth) ||
+			    !READ_ONCE(mtk_flow_offload_get_cdrt))
 				return -EOPNOTSUPP;
 
+			data.ipsec.cdrt_id =
+				mtk_flow_offload_get_cdrt(act->ipsec.xs);
+			if (!data.ipsec.cdrt_id)
+				return -EOPNOTSUPP;
+			break;
+		case FLOW_ACTION_NPU_ENCAP:
 			data.npu_entry = act->npu.npu_entry;
+			if (act->npu.dst) {
+#ifdef CONFIG_XFRM
+				/* tunnel over IPsec: the EIP-197 encrypts after
+				 * the NPU encapsulated
+				 */
+				struct xfrm_state *xs_old = dst_xfrm(act->npu.dst);
+				struct xfrm_state *xs;
+
+				if (!xs_old || !mtk_is_netsys_v3_or_greater(eth) ||
+				    !READ_ONCE(mtk_flow_offload_get_cdrt))
+					return -EOPNOTSUPP;
+
+				/* the state in the dst may be stale after a rekey */
+				xs = xfrm_state_lookup_byaddr(dev_net(act->npu.dst->dev),
+							      xs_old->mark.v,
+							      &xs_old->id.daddr,
+							      &xs_old->props.saddr,
+							      xs_old->id.proto,
+							      xs_old->props.family);
+				if (!xs)
+					return -EOPNOTSUPP;
+
+				data.ipsec.cdrt_id = mtk_flow_offload_get_cdrt(xs);
+				xfrm_state_put(xs);
+				if (!data.ipsec.cdrt_id)
+					return -EOPNOTSUPP;
+#else
+				return -EOPNOTSUPP;
+#endif
+			}
 			break;
 		default:
 			return -EOPNOTSUPP;
@@ -505,12 +545,19 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 	if (err)
 		return err;
 
+	if (data.ipsec.cdrt_id)
+		mtk_foe_entry_set_cdrt(eth, &foe, data.ipsec.cdrt_id);
+
 	if (data.npu_entry) {
 		if (!mtk_is_netsys_v3_or_greater(eth))
 			return -EOPNOTSUPP;
 
 		mtk_foe_entry_set_tops_entry(eth, &foe, data.npu_entry);
-		mtk_foe_entry_set_tport(eth, &foe, TPORT_NPU_QDMA);
+		mtk_foe_entry_set_tport(eth, &foe, data.ipsec.cdrt_id ?
+						   TPORT_NPU_EIP197_QDMA :
+						   TPORT_NPU_QDMA);
+	} else if (data.ipsec.cdrt_id) {
+		mtk_foe_entry_set_tport(eth, &foe, TPORT_EIP197_QDMA);
 	}
 
 	if (wed_index >= 0 && (err = mtk_wed_flow_add(wed_index)) < 0)

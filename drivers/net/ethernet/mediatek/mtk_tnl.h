@@ -9,6 +9,7 @@
 #ifndef MTK_TNL_H
 #define MTK_TNL_H
 
+#include <linux/in.h>
 #include <linux/skbuff.h>
 
 struct mtk_tnl_desc {
@@ -47,5 +48,41 @@ struct mtk_tnl_desc {
 #define skb_tnl_magic_tag(skb) (((struct mtk_tnl_desc *)((skb)->head))->magic_tag_protect)
 #define is_tnl_tag_valid(skb) (skb_tnl_magic_tag(skb) == TNL_MAGIC_TAG)
 #define skb_tnl_is_pppoe(skb) (((struct mtk_tnl_desc *)((skb)->head))->is_pppoe)
+
+
+/* True when the skb was marked for the EIP-197 by the crypto-eip-inline
+ * driver (xfrm packet offload). The marker is skb->inner_protocol == ESP
+ * together with a valid tunnel descriptor in the headroom; both must hold
+ * because the descriptor does not survive every skb copy.
+ */
+static inline bool mtk_tnl_esp_tagged(const struct sk_buff *skb)
+{
+	return unlikely(skb->inner_protocol == IPPROTO_ESP) &&
+	       skb_headroom(skb) >= sizeof(struct mtk_tnl_desc) &&
+	       is_tnl_tag_valid(skb) && skb_tnl_cdrt(skb);
+}
+
+/* Carry the tunnel descriptor over to skbs that were split off @old (GSO
+ * segments), so the segments are still sent through the EIP-197 instead of
+ * leaving as plain text.
+ */
+static inline int mtk_skb_copy_head(struct sk_buff *new, struct sk_buff *old)
+{
+	bool esp = mtk_tnl_esp_tagged(old);
+	struct sk_buff *temp;
+
+	if (!esp)
+		return 0;
+
+	for (temp = new; temp; temp = temp->next) {
+		if (skb_cow_head(temp, skb_headroom(old)))
+			return -ENOMEM;
+
+		memcpy(temp->head, old->head, sizeof(struct mtk_tnl_desc));
+		temp->inner_protocol = IPPROTO_ESP;
+	}
+
+	return 0;
+}
 
 #endif /* MTK_TNL_H */

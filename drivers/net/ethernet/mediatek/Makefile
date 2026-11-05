@@ -13,3 +13,4 @@ obj-$(CONFIG_NET_MEDIATEK_SOC_WED) += mtk_wed_ops.o
 obj-$(CONFIG_NET_MEDIATEK_STAR_EMAC) += mtk_star_emac.o
 obj-$(CONFIG_MTK_PCE) += pce/
 obj-$(CONFIG_MTK_NPU) += npu/
+obj-$(CONFIG_MTK_CRYPTO_EIP_DDK) += crypto-eip/

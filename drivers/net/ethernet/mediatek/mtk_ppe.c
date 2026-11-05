@@ -436,6 +436,17 @@ int mtk_foe_entry_set_tport(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 	return 0;
 }
 
+int mtk_foe_entry_set_cdrt(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			   int cdrt)
+{
+	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+
+	l2->tinfo &= ~MTK_FOE_CDRT_IDX;
+	l2->tinfo |= FIELD_PREP(MTK_FOE_CDRT_IDX, cdrt);
+
+	return 0;
+}
+
 int mtk_foe_entry_set_tops_entry(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 				 int tops_entry)
 {

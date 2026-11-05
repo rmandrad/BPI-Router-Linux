@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config MTK_CRYPTO_EIP_DDK
+	tristate "MediaTek EIP-197 crypto engine (Rambus DDK)"
+	depends on NET_MEDIATEK_SOC && ARM64 && OF
+	depends on m
+	help
+	  Rambus Driver Development Kit for the Security-IP EIP-197 crypto
+	  engine of the MediaTek MT7988. It builds four modules:
+
+	    crypto-eip-ddk-ksupport  kernel support, binds the "crypto" DT node
+	    crypto-eip-ddk-ctrl      global control, downloads the engine firmware
+	    crypto-eip-ddk-ctrl-app  global control application
+	    crypto-eip-ddk-engine    packet engine / classification (PEC, PCL)
+
+	  Load them in that order. The engine firmware images
+	  firmware_eip207_{ifpp,ipue,ofpp,opue}.bin must be in /lib/firmware.
+
+	  The DT node must not also match the in-tree safexcel driver; give it
+	  only the compatible "security-ip-197-srv".
+
+	  This only brings the engine up. IPsec offload itself needs the
+	  inline driver on top of it.
+
+	  If unsure, say N.
+
+config MTK_CRYPTO_EIP_INLINE
+	tristate "MediaTek EIP-197 inline IPsec offload"
+	depends on MTK_CRYPTO_EIP_DDK && MTK_PCE && NET_MEDIATEK_SOC
+	depends on XFRM_OFFLOAD && NF_FLOW_TABLE
+	depends on IPV6=y || IPV6=n
+	depends on m
+	select CRYPTO_HASH
+	select CRYPTO_AES
+	select CRYPTO_MD5
+	select CRYPTO_SHA1
+	select CRYPTO_SHA256
+	select CRYPTO_SHA512
+	help
+	  Inline IPsec ESP offload on the EIP-197 engine of the MT7988. The
+	  driver registers as an xfrm packet-offload device for the MediaTek
+	  Ethernet MACs (and DSA ports on top of them): outbound packets are
+	  encrypted by the engine on their way to the PSE, inbound ESP
+	  packets are decrypted by the engine before they reach the CPU, and
+	  both directions can be accelerated by the PPE flow offload.
+
+	  Requires the CONFIG_MTK_CRYPTO_EIP_DDK modules to be loaded
+	  first. Only ESP tunnel and transport mode with the algorithms
+	  rfc4106(gcm(aes)), rfc4543(gcm(aes)), rfc4309(ccm(aes)),
+	  cbc(aes|des|des3_ede) with hmac(md5|sha1|sha256|sha384|sha512)
+	  are handled. IPsec on top of PPP interfaces is not supported.
+
+	  Use ip xfrm with "offload packet dev <ethernet device>" on both
+	  the states and the policies.
+
+	  If unsure, say N.

@@ -965,6 +965,12 @@ struct net_device_path {
 
 extern int (*mtk_flow_tnl_offloadable)(const struct net_device_path *path);
 
+/* Called after software GSO split @old into @new; lets a hardware offload
+ * driver carry per-packet metadata (kept in the skb headroom) over to the
+ * segments. Set by crypto-eip-inline.
+ */
+extern int (*mtk_gso_skb_copy_head)(struct sk_buff *new, struct sk_buff *old);
+
 #define NET_DEVICE_PATH_STACK_MAX	5
 #define NET_DEVICE_PATH_VLAN_MAX	2
 

@@ -408,6 +408,8 @@ int mtk_foe_entry_set_pppoe(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			    int sid);
 int mtk_foe_entry_set_tport(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			    int tport);
+int mtk_foe_entry_set_cdrt(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			   int cdrt);
 int mtk_foe_entry_set_tops_entry(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 				 int tops_entry);
 int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,

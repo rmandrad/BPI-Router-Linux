@@ -33,6 +33,7 @@
 #include <linux/genalloc.h>
 
 #include "mtk_eth_soc.h"
+#include "mtk_tnl.h"
 #include "mtk_eth_dbg.h"
 #include "mtk_wed.h"
 
@@ -327,6 +328,9 @@ static const char * const mtk_clks_source_name[] = {
 
 struct net_device *(*mtk_get_tnl_dev)(u8 tops_crsn);
 EXPORT_SYMBOL_GPL(mtk_get_tnl_dev);
+
+void (*mtk_crypto_set_dec_secpath)(struct sk_buff *skb, u16 cdrt);
+EXPORT_SYMBOL_GPL(mtk_crypto_set_dec_secpath);
 
 void mtk_w32(struct mtk_eth *eth, u32 val, unsigned reg)
 {
@@ -1733,6 +1737,7 @@ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
 	}
 
 	data |= TX_DMA_SWC_V2 | QID_BITS_V2(info->qid);
+	data |= FIELD_PREP(TX_DMA_TPORT_MASK, info->tport);
 	WRITE_ONCE(desc->txd4, data);
 
 	data = 0;
@@ -1753,7 +1758,7 @@ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
 	WRITE_ONCE(desc->txd6, data);
 
 	WRITE_ONCE(desc->txd7, 0);
-	WRITE_ONCE(desc->txd8, 0);
+	WRITE_ONCE(desc->txd8, FIELD_PREP(TX_DMA_CDRT_MASK, info->cdrt));
 }
 
 static void mtk_tx_set_dma_desc(struct net_device *dev, void *txd,
@@ -1812,6 +1817,12 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 	itx_buf = mtk_desc_to_tx_buf(ring, itxd, soc->tx.desc_size);
 	memset(itx_buf, 0, sizeof(*itx_buf));
 
+	/* inline IPsec: have the PSE send this packet through the EIP-197 */
+	if (mtk_is_netsys_v3_or_greater(eth) && mtk_tnl_esp_tagged(skb)) {
+		txd_info.cdrt = skb_tnl_cdrt(skb);
+		txd_info.tport = TPORT_EIP197_QDMA;
+	}
+
 	txd_info.addr = dma_map_single(eth->dma_dev, skb->data, txd_info.size,
 				       DMA_TO_DEVICE);
 	if (unlikely(dma_mapping_error(eth->dma_dev, txd_info.addr)))
@@ -1852,6 +1863,11 @@ static int mtk_tx_map(struct sk_buff *skb, struct net_device *dev,
 			txd_info.size = min_t(unsigned int, frag_size,
 					      soc->tx.dma_max_len);
 			txd_info.qid = queue;
+			if (mtk_is_netsys_v3_or_greater(eth) &&
+			    mtk_tnl_esp_tagged(skb)) {
+				txd_info.cdrt = skb_tnl_cdrt(skb);
+				txd_info.tport = TPORT_EIP197_QDMA;
+			}
 			txd_info.last = i == skb_shinfo(skb)->nr_frags - 1 &&
 					!(frag_size - txd_info.size);
 			txd_info.addr = skb_frag_dma_map(eth->dma_dev, frag,
@@ -2539,6 +2555,16 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 
 		skb->dev = netdev;
 		bytes += skb->len;
+
+		/* EIP-197 inline decryption: attach the matching xfrm state */
+		if (mtk_is_netsys_v3_or_greater(eth)) {
+			void (*set_dec_secpath)(struct sk_buff *skb, u16 cdrt) =
+				READ_ONCE(mtk_crypto_set_dec_secpath);
+			u16 cdrt = RX_DMA_GET_CDRT(trxd.rxd7);
+
+			if (set_dec_secpath && cdrt)
+				set_dec_secpath(skb, cdrt);
+		}
 
 		if (mtk_is_netsys_v3_or_greater(eth)) {
 			reason = FIELD_GET(MTK_RXD5_PPE_CPU_REASON, trxd.rxd5);

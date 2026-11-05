@@ -286,7 +286,11 @@ static int nft_dev_forward_path(const struct nft_pktinfo *pkt,
 	route->tuple[!dir].in.num_encaps = info.num_encaps;
 	route->tuple[!dir].in.ingress_vlans = info.ingress_vlans;
 
-	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT) {
+	/* An xfrm route keeps its xmit type: its L2 header is built by the
+	 * offload engine, only the output interface is resolved here.
+	 */
+	if (info.xmit_type == FLOW_OFFLOAD_XMIT_DIRECT &&
+	    route->tuple[dir].xmit_type != FLOW_OFFLOAD_XMIT_XFRM) {
 		memcpy(route->tuple[dir].out.h_source, info.h_source, ETH_ALEN);
 		memcpy(route->tuple[dir].out.h_dest, info.h_dest, ETH_ALEN);
 		route->tuple[dir].xmit_type = info.xmit_type;
@@ -340,11 +344,18 @@ int nft_flow_route(const struct nft_pktinfo *pkt, const struct nf_conn *ct,
 	nft_default_forward_path(route, this_dst, dir);
 	nft_default_forward_path(route, other_dst, !dir);
 
-	if (route->tuple[dir].xmit_type	== FLOW_OFFLOAD_XMIT_NEIGH &&
+	/* With hardware offload an xfrm route needs its output interface
+	 * resolved as well; software offload of xfrm routes needs nothing.
+	 */
+	if ((route->tuple[dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH ||
+	     (route->tuple[dir].xmit_type == FLOW_OFFLOAD_XMIT_XFRM &&
+	      nf_flowtable_hw_offload(&ft->data))) &&
 	    nft_dev_forward_path(pkt, route, ct, dir, ft) < 0)
 		goto err_dst_release;
 
-	if (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH &&
+	if ((route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_NEIGH ||
+	     (route->tuple[!dir].xmit_type == FLOW_OFFLOAD_XMIT_XFRM &&
+	      nf_flowtable_hw_offload(&ft->data))) &&
 	    nft_dev_forward_path(pkt, route, ct, !dir, ft) < 0)
 		goto err_dst_release;
 
