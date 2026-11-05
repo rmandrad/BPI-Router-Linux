@@ -48,6 +48,7 @@
 #include <uapi/linux/pkt_cls.h>
 #include <uapi/linux/netdev.h>
 #include <linux/hashtable.h>
+#include <uapi/linux/netfilter.h>
 #include <linux/rbtree.h>
 #include <net/net_trackers.h>
 #include <net/net_debug.h>
@@ -888,6 +889,8 @@ enum net_device_path_type {
 	DEV_PATH_MTK_WDMA,
 	DEV_PATH_TUN,
 	DEV_PATH_IEEE80211,
+	DEV_PATH_L2TP,
+	DEV_PATH_PPTP,
 };
 
 struct net_device_path {
@@ -933,8 +936,34 @@ struct net_device_path {
 			u8 bss;
 			u8 amsdu;
 		} mtk_wdma;
+		struct {
+			u8 h_source[ETH_ALEN];
+			u8 h_dest[ETH_ALEN];
+			union nf_inet_addr sip;
+			union nf_inet_addr dip;
+			u16 sport;
+			u16 dport;
+			union {
+				struct {
+					u16 ul_tid;
+					u16 dl_tid;
+					u16 ul_sid;
+					u16 dl_sid;
+				} l2tp;
+				struct {
+					u16 call_id;
+					u16 peer_call_id;
+					u32 seq_sent;
+				} pptp;
+				/* Extend other tunnel here */
+			};
+			/* Info used to find xfrm_state for IPSec (encap direction) */
+			struct dst_entry *dst;
+		} tunnel;
 	};
 };
+
+extern int (*mtk_flow_tnl_offloadable)(const struct net_device_path *path);
 
 #define NET_DEVICE_PATH_STACK_MAX	5
 #define NET_DEVICE_PATH_VLAN_MAX	2

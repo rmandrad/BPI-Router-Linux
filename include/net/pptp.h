@@ -23,5 +23,9 @@ struct pptp_gre_header {
 	__be32 ack;
 } __packed;
 
+/* Hook set by the MediaTek NPU driver to take over PPTP sequence numbers;
+ * defined in drivers/net/ppp/pptp.c.
+ */
+extern int (*mtk_pptp_seq_next)(u16 call_id, u32 *val);
 
 #endif

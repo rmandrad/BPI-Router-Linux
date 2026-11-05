@@ -1897,6 +1897,46 @@ ppp_prepare_tx_skb(struct ppp *ppp, struct sk_buff **pskb)
 }
 
 /*
+ * Get the socket of the (single) channel of a ppp netdev, so that tunnel
+ * offload hardware can read the tunnel parameters kept in the socket.
+ * The returned socket is not reference counted.
+ */
+struct sock *ppp_netdev_get_sock(struct net_device *dev)
+{
+	struct list_head *list;
+	struct channel *pch;
+	struct ppp *ppp;
+	struct sock *sk;
+
+	if (!dev)
+		return ERR_PTR(-EINVAL);
+
+	ppp = netdev_priv(dev);
+
+	list = &ppp->channels;
+	if (list_empty(list))
+		/* nowhere to send the packet */
+		return ERR_PTR(-EINVAL);
+
+	if (ppp->flags & SC_MULTILINK)
+		/* multilink is not supported */
+		return ERR_PTR(-EPERM);
+
+	list = list->next;
+	pch = list_entry(list, struct channel, clist);
+
+	spin_lock(&pch->downl);
+	if (pch->chan)
+		sk = (struct sock *)pch->chan->private;
+	else
+		sk = ERR_PTR(-EINVAL);
+	spin_unlock(&pch->downl);
+
+	return sk;
+}
+EXPORT_SYMBOL_GPL(ppp_netdev_get_sock);
+
+/*
  * Try to send the frame.
  * The caller should have the xmit path locked.
  * Returns 1 if the skb was consumed, 0 if not.

@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config MTK_NPU
+	tristate "MediaTek Network Processing Unit (TOPS) offload"
+	depends on NET_MEDIATEK_SOC && ARM64 && OF && DEBUG_FS
+	depends on MTK_PCE && MTK_SCPSYS_MT7988
+	depends on m
+	select DMA_ENGINE
+	select DMA_VIRTUAL_CHANNELS
+	help
+	  Support for the MediaTek MT7988 Network Processing Unit (TOPS),
+	  a set of offload cores that perform tunnel encapsulation and
+	  decapsulation (L2oGRE, VxLAN, L2TP, PPTP, ...) for the packet
+	  engine. This is the core driver: it loads the firmware, brings the
+	  cores up and exposes the tunnel offload operations. A frontend
+	  (e.g. MTK_NPU_FLOW) hooks it to the flow offload framework.
+
+	  Needs firmware/mediatek/tops-{mgmt,offload}.img in /lib/firmware.
+	  Module only (npu.ko).
+
+	  If unsure, say N.
+
+if MTK_NPU
+
+config MTK_NPU_FLOW
+	tristate "NPU tunnel offload through the flow table framework"
+	depends on NF_FLOW_TABLE
+	help
+	  Hook the NPU into nf_flow_table so that tunnel flows (selected
+	  by the nftables flowtable) are offloaded to the NPU through the
+	  PPE. Module only (npu-flow.ko).
+
+config MTK_NPU_SECURE_FW
+	bool "NPU secure firmware load"
+	help
+	  Load the NPU firmware through the secure monitor (SMC call)
+	  instead of writing it into the NPU memory directly.
+
+config MTK_NPU_MEM_TEST
+	bool "NPU memory test at bring-up"
+	depends on !MTK_NPU_SECURE_FW
+	default y
+	help
+	  Write test patterns to NPU memory and read them back while the
+	  NPU is brought up, to verify memory integrity and accessibility
+	  from the host CPU.
+
+config MTK_NPU_THERMAL
+	bool "NPU thermal throttling"
+	depends on THERMAL
+	default y
+	help
+	  Throttle NPU usage (through MCU dynamic frequency scaling) when
+	  the board temperature gets too high.
+
+config MTK_NPU_LOGGER
+	bool "NPU firmware logger"
+	select RELAY
+	help
+	  Log the NPU firmware output to relayfs. Logging is off at run
+	  time until enabled from user space.
+
+config MTK_NPU_LOGGER_FW_DEFAULT_RUNNING
+	bool "Start the NPU firmware logger by default"
+	depends on MTK_NPU_LOGGER
+	help
+	  Turn the firmware logger on at boot, to capture the firmware cold
+	  boot log.
+
+menu "NPU tunnel protocols"
+
+config MTK_NPU_GRETAP
+	bool "L2oGRE (GRETAP) offload"
+	depends on NET_IPGRE_DEMUX
+	default y
+
+config MTK_NPU_VXLAN
+	bool "VxLAN offload"
+	depends on VXLAN
+	default y
+
+config MTK_NPU_PPTP
+	bool "PPTP offload"
+	depends on PPTP
+	default y
+
+config MTK_NPU_L2TP_V2
+	bool "L2TPv2 offload"
+	depends on PPPOL2TP
+	default y
+
+endmenu
+
+menu "NPU network features (special purpose)"
+
+config MTK_NPU_ADPT_FWD
+	bool "Adapter forward"
+	help
+	  Bridge WAN with another network port when the NPU receives a
+	  specific type of packet. Not for normal use.
+
+config MTK_NPU_L4S
+	bool "L4S"
+	help
+	  L4S congestion control in the NPU. Incompatible with the other
+	  NPU features. Not for normal use.
+
+config MTK_NPU_RATE_LIMIT
+	bool "Rate limit"
+	help
+	  Forward certain packet types through 4 QoS queues. Not for
+	  normal use.
+
+endmenu
+
+endif # MTK_NPU
+
+config NPU_TNL_NUM
+	int
+	default 32
+
+config NPU_TNL_MAP_BIT
+	int
+	default 5
+
+config NPU_TNL_TYPE_NUM
+	int
+	default 32

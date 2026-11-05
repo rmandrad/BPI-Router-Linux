@@ -697,6 +697,15 @@ nf_flow_rule_route_common(struct net *net, const struct flow_offload *flow,
 		return -1;
 
 	tuple = &flow->tuplehash[dir].tuple;
+	if (tuple->npu.npu_entry) {
+		struct flow_action_entry *entry;
+
+		entry = flow_action_entry_next(flow_rule);
+		entry->id = FLOW_ACTION_NPU_ENCAP;
+		entry->npu.npu_entry = tuple->npu.npu_entry;
+		if (tuple->npu.dst)
+			entry->npu.dst = tuple->npu.dst;
+	}
 
 	for (i = 0; i < tuple->encap_num; i++) {
 		struct flow_action_entry *entry;

@@ -16,6 +16,10 @@
 #include <net/netfilter/nf_conntrack_extend.h>
 #include <net/netfilter/nf_flow_table.h>
 
+/* MediaTek NPU tunnel offload hook; set by the npu-flow driver. */
+int (*mtk_flow_tnl_offload)(const struct net_device_path *path, u32 *entry);
+EXPORT_SYMBOL_GPL(mtk_flow_tnl_offload);
+
 static enum flow_offload_xmit_type nft_xmit_type(struct dst_entry *dst)
 {
 	if (dst_xfrm(dst))
@@ -96,6 +100,8 @@ struct nft_forward_info {
 	u8 h_source[ETH_ALEN];
 	u8 h_dest[ETH_ALEN];
 	bool needs_gso_segment;
+	u32 npu_entry;
+	struct dst_entry *npu_dst;
 	enum flow_offload_xmit_type xmit_type;
 };
 
@@ -120,6 +126,8 @@ static int nft_dev_path_info(struct net_device_path_stack *stack,
 		case DEV_PATH_VLAN:
 		case DEV_PATH_PPPOE:
 		case DEV_PATH_TUN:
+		case DEV_PATH_L2TP:
+		case DEV_PATH_PPTP:
 			info->dev = path->dev;
 			if (is_zero_ether_addr(info->h_source))
 				memcpy(info->h_source, path->dev->dev_addr, ETH_ALEN);
@@ -128,6 +136,18 @@ static int nft_dev_path_info(struct net_device_path_stack *stack,
 			    path->type == DEV_PATH_IEEE80211 ||
 			    path->type == DEV_PATH_DSA)
 				break;
+
+			/* MediaTek NPU tunnel offload (L2TP, PPTP) */
+			if (path->type == DEV_PATH_L2TP ||
+			    path->type == DEV_PATH_PPTP) {
+				if (!mtk_flow_tnl_offload ||
+				    mtk_flow_tnl_offload(path, &info->npu_entry) < 0)
+					goto err_out;
+
+				memcpy(info->h_dest, path->tunnel.h_dest, ETH_ALEN);
+				info->npu_dst = path->tunnel.dst;
+				break;
+			}
 
 			/* DEV_PATH_VLAN, DEV_PATH_PPPOE and DEV_PATH_TUN */
 			if (path->type == DEV_PATH_TUN) {
@@ -272,6 +292,8 @@ static int nft_dev_forward_path(const struct nft_pktinfo *pkt,
 		route->tuple[dir].xmit_type = info.xmit_type;
 	}
 	route->tuple[dir].out.needs_gso_segment = info.needs_gso_segment;
+	route->tuple[dir].npu.npu_entry = info.npu_entry;
+	route->tuple[dir].npu.dst = info.npu_dst;
 
 	return 0;
 }

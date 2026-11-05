@@ -130,6 +130,8 @@ err_flow_alloc:
 	dst_release(route.tuple[dir].dst);
 	dst_release(route.tuple[!dir].dst);
 err_flow_route:
+	dst_release(route.tuple[dir].npu.dst);
+	dst_release(route.tuple[!dir].npu.dst);
 	clear_bit(IPS_OFFLOAD_BIT, &ct->status);
 out:
 	regs->verdict.code = NFT_BREAK;

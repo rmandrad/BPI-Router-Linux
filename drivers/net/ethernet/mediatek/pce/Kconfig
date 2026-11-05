@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+config MTK_PCE
+	tristate "MediaTek Packet Classification Engine (PCE)"
+	depends on NET_MEDIATEK_SOC && ARM64
+	help
+	  Support for the MediaTek Packet Classification Engine in NETSYS.
+	  The PCE matches inbound packets (IP protocol, destination address,
+	  L4 header or data) and redirects them to a MediaTek offload engine:
+	  the NPU (tunnel offload) or the EIP-197 inline crypto engine. It is
+	  required by CONFIG_MTK_NPU and CONFIG_MTK_CRYPTO_EIP.
+
+	  If unsure, say N.

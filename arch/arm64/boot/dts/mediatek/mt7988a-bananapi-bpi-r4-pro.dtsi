@@ -695,3 +695,24 @@
 &xsphy {
 	status = "okay";
 };
+
+/* MediaTek NPU (TOPS) + EIP-197 inline crypto offload */
+&tops_pwr {
+	status = "okay";
+};
+
+&pce {
+	status = "okay";
+};
+
+&npu {
+	status = "okay";
+};
+
+&npu_ocd {
+	status = "okay";
+};
+
+&crypto {
+	status = "okay";
+};

@@ -96,6 +96,18 @@ enum {
 #define MTK_FOE_WINFO_AMSDU_HF		BIT(23)
 #define MTK_FOE_WINFO_AMSDU_EN		BIT(24)
 
+/* netsys_v3 l2 tport/tinfo */
+#define MTK_FOE_TPORT_IDX		GENMASK(3, 0)
+#define MTK_FOE_CDRT_IDX		GENMASK(7, 0)
+#define MTK_FOE_TOPS_ENTRY		GENMASK(13, 8)
+
+/* Selector for mtk_flow_offload_teardown_by_tnl() */
+enum {
+	MTK_FOE_NPU_DEL,
+	MTK_FOE_CRYPTO_DEL,
+	MTK_FOE_DEL_MAX
+};
+
 enum {
 	MTK_FOE_STATE_INVALID,
 	MTK_FOE_STATE_UNBIND,
@@ -124,6 +136,8 @@ struct mtk_foe_mac_info {
 	/* netsys_v3 */
 	u32 w3info;
 	u32 amsdu;
+	u16 tinfo;
+	u16 tport;
 };
 
 /* software-only entry type */
@@ -392,6 +406,10 @@ int mtk_foe_entry_set_vlan(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int vid);
 int mtk_foe_entry_set_pppoe(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			    int sid);
+int mtk_foe_entry_set_tport(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			    int tport);
+int mtk_foe_entry_set_tops_entry(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+				 int tops_entry);
 int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int wdma_idx, int txq, int bss, int wcid,
 			   bool amsdu_en);
@@ -399,6 +417,13 @@ int mtk_foe_entry_set_queue(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			    unsigned int queue);
 int mtk_foe_entry_commit(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
 void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
+struct xfrm_state;
+/* Set by the crypto engine driver: returns the CDRT index of an IPsec SA */
+extern int (*mtk_flow_offload_get_cdrt)(struct xfrm_state *xs);
+
+struct flow_offload_tuple;
+void mtk_flow_offload_teardown_by_tnl(struct mtk_eth *eth, u32 mode, int id,
+				     void (*teardown)(struct flow_offload_tuple *tuple));
 int mtk_foe_entry_idle_time(struct mtk_ppe *ppe, struct mtk_flow_entry *entry);
 int mtk_ppe_debugfs_init(struct mtk_ppe *ppe, int index);
 struct mtk_foe_accounting *mtk_foe_entry_get_mib(struct mtk_ppe *ppe, u32 index,

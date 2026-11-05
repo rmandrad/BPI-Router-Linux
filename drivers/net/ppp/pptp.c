@@ -41,6 +41,9 @@
 
 #define MAX_CALLID 65535
 
+int (*mtk_pptp_seq_next)(u16 call_id, u32 *val) = NULL;
+EXPORT_SYMBOL_GPL(mtk_pptp_seq_next);
+
 static DECLARE_BITMAP(callid_bitmap, MAX_CALLID + 1);
 static struct pppox_sock __rcu **callid_sock;
 
@@ -158,6 +161,7 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	int islcp;
 	int len;
 	unsigned char *data;
+	u32 seq_sent_hw;
 	__u32 seq_recv;
 	struct rtable *rt;
 	struct net_device *tdev;
@@ -220,7 +224,14 @@ static int pptp_xmit(struct ppp_channel *chan, struct sk_buff *skb)
 	hdr->gre_hd.protocol = GRE_PROTO_PPP;
 	hdr->call_id = htons(opt->dst_addr.call_id);
 
-	hdr->seq = htonl(++opt->seq_sent);
+	if (mtk_pptp_seq_next && !mtk_pptp_seq_next(opt->dst_addr.call_id,
+						    &seq_sent_hw)) {
+		opt->seq_sent = seq_sent_hw;
+		hdr->seq = htonl(opt->seq_sent);
+	} else {
+		hdr->seq = htonl(++opt->seq_sent);
+	}
+
 	if (opt->ack_sent != seq_recv)	{
 		/* send ack with this message */
 		hdr->gre_hd.flags |= GRE_ACK;
@@ -604,9 +615,64 @@ static int pptp_ppp_ioctl(struct ppp_channel *chan, unsigned int cmd,
 	return err;
 }
 
+static int pptp_fill_forward_path(struct net_device_path_ctx *ctx,
+				  struct net_device_path *path,
+				  const struct ppp_channel *chan)
+{
+	struct sock *sk = chan->private;
+	struct pppox_sock *po = pppox_sk(sk);
+	struct pptp_opt *opt = &po->proto.pptp;
+	struct neighbour *n;
+	struct flowi4 fl4;
+	struct rtable *rt;
+
+	if (sock_flag(sk, SOCK_DEAD) || !(sk->sk_state & PPPOX_CONNECTED))
+		return -ENOTCONN;
+
+	path->type = DEV_PATH_PPTP;
+	if (!mtk_flow_tnl_offloadable || !mtk_flow_tnl_offloadable(path))
+		return -EOPNOTSUPP;
+
+	path->tunnel.sip.ip = opt->src_addr.sin_addr.s_addr;
+	path->tunnel.dip.ip = opt->dst_addr.sin_addr.s_addr;
+	path->tunnel.pptp.call_id = opt->src_addr.call_id;
+	path->tunnel.pptp.peer_call_id = opt->dst_addr.call_id;
+	path->tunnel.pptp.seq_sent = opt->seq_sent;
+
+	rt = pptp_route_output(po, &fl4);
+	if (IS_ERR(rt))
+		return  PTR_ERR(rt);
+
+	n = dst_neigh_lookup(&rt->dst, &opt->dst_addr.sin_addr.s_addr);
+	if (!n)
+		goto err_put_rt;
+
+	if (!(READ_ONCE(n->nud_state) & NUD_VALID)) {
+		neigh_release(n);
+		goto err_put_rt;
+	}
+
+	neigh_ha_snapshot(path->tunnel.h_dest, n, n->dev);
+	memcpy(path->tunnel.h_source, n->dev->dev_addr, ETH_ALEN);
+
+	path->dev = ctx->dev;
+	ctx->dev = n->dev;
+
+	neigh_release(n);
+	ip_rt_put(rt);
+
+	return 0;
+
+err_put_rt:
+	ip_rt_put(rt);
+
+	return -EHOSTUNREACH;
+}
+
 static const struct ppp_channel_ops pptp_chan_ops = {
 	.start_xmit = pptp_xmit,
 	.ioctl      = pptp_ppp_ioctl,
+	.fill_forward_path = pptp_fill_forward_path,
 };
 
 static struct proto pptp_sk_proto __read_mostly = {

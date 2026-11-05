@@ -325,6 +325,9 @@ static const char * const mtk_clks_source_name[] = {
 	"top_netsys_warp_sel",
 };
 
+struct net_device *(*mtk_get_tnl_dev)(u8 tops_crsn);
+EXPORT_SYMBOL_GPL(mtk_get_tnl_dev);
+
 void mtk_w32(struct mtk_eth *eth, u32 val, unsigned reg)
 {
 	__raw_writel(val, eth->base + reg);
@@ -2432,7 +2435,18 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 			     !eth->netdev[mac]))
 			goto release_desc;
 
-		netdev = eth->netdev[mac];
+		netdev = NULL;
+		if (mtk_is_netsys_v3_or_greater(eth) && mtk_get_tnl_dev) {
+			u8 tops_crsn = RX_DMA_GET_TOPS_CRSN(trxd.rxd6);
+
+			if (tops_crsn) {
+				netdev = mtk_get_tnl_dev(tops_crsn);
+				if (IS_ERR(netdev))
+					netdev = NULL;
+			}
+		}
+		if (!netdev)
+			netdev = eth->netdev[mac];
 		ppe_idx = eth->mac[mac]->ppe_idx;
 
 		if (unlikely(test_bit(MTK_RESETTING, &eth->state)))
@@ -2463,7 +2477,8 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 					 true);
 			xdp_buff_clear_frags_flag(&xdp);
 
-			ret = mtk_xdp_run(eth, ring, &xdp, netdev);
+			/* netdev may be an NPU tunnel device; XDP state belongs to the MAC */
+			ret = mtk_xdp_run(eth, ring, &xdp, eth->netdev[mac]);
 			if (ret == XDP_REDIRECT)
 				xdp_flush = true;
 

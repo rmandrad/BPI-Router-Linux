@@ -13,6 +13,8 @@
 #include <linux/if_pppox.h>
 #include <linux/ppp_defs.h>
 
+extern int (*mtk_flow_tnl_offload)(const struct net_device_path *path, u32 *entry);
+
 struct nf_flowtable;
 struct nf_flow_rule;
 struct flow_offload;
@@ -171,6 +173,10 @@ struct flow_offload_tuple {
 			u32		iifidx;
 		} tc;
 	};
+	struct {
+		u32				npu_entry;
+		struct dst_entry		*dst;
+	} npu;
 };
 
 struct flow_offload_tuple_rhash {
@@ -237,6 +243,10 @@ struct nf_flow_route {
 			u8			needs_gso_segment:1;
 		} out;
 		enum flow_offload_xmit_type	xmit_type;
+		struct {
+			u32			npu_entry;
+			struct dst_entry	*dst;
+		} npu;
 	} tuple[FLOW_OFFLOAD_DIR_MAX];
 };
 
@@ -329,6 +339,7 @@ int nf_flow_table_init(struct nf_flowtable *flow_table);
 void nf_flow_table_free(struct nf_flowtable *flow_table);
 
 void flow_offload_teardown(struct flow_offload *flow);
+void flow_offload_teardown_by_tuple(struct flow_offload_tuple *tuple);
 
 void nf_flow_snat_port(const struct flow_offload *flow,
 		       struct sk_buff *skb, unsigned int thoff,

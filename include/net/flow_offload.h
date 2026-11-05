@@ -6,6 +6,8 @@
 #include <linux/netlink.h>
 #include <net/flow_dissector.h>
 
+struct dst_entry;
+
 struct flow_match {
 	struct flow_dissector	*dissector;
 	void			*mask;
@@ -184,6 +186,7 @@ enum flow_action_id {
 	FLOW_ACTION_VLAN_PUSH_ETH,
 	FLOW_ACTION_VLAN_POP_ETH,
 	FLOW_ACTION_CONTINUE,
+	FLOW_ACTION_NPU_ENCAP,
 	NUM_FLOW_ACTIONS,
 };
 
@@ -329,6 +332,10 @@ struct flow_action_entry {
 		struct {				/* FLOW_ACTION_PPPOE_PUSH */
 			u16		sid;
 		} pppoe;
+		struct {				/* FLOW_ACTION_NPU_ENCAP */
+			u32 npu_entry;
+			struct dst_entry *dst;
+		} npu;
 	};
 	struct flow_action_cookie *user_cookie; /* user defined action cookie */
 };

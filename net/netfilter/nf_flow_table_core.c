@@ -151,6 +151,9 @@ static int flow_offload_fill_route(struct flow_offload *flow,
 		break;
 	}
 	flow_tuple->xmit_type = route->tuple[dir].xmit_type;
+	flow_tuple->npu.npu_entry = route->tuple[dir].npu.npu_entry;
+	flow_tuple->npu.dst = route->tuple[dir].npu.dst;
+	route->tuple[dir].npu.dst = NULL;
 
 	return 0;
 }
@@ -256,6 +259,12 @@ static void flow_offload_route_release(struct flow_offload *flow)
 {
 	nft_flow_dst_release(flow, FLOW_OFFLOAD_DIR_ORIGINAL);
 	nft_flow_dst_release(flow, FLOW_OFFLOAD_DIR_REPLY);
+
+	dst_release(flow->tuplehash[FLOW_OFFLOAD_DIR_ORIGINAL].tuple.npu.dst);
+	dst_release(flow->tuplehash[FLOW_OFFLOAD_DIR_REPLY].tuple.npu.dst);
+
+	flow->tuplehash[FLOW_OFFLOAD_DIR_ORIGINAL].tuple.npu.dst = NULL;
+	flow->tuplehash[FLOW_OFFLOAD_DIR_REPLY].tuple.npu.dst = NULL;
 }
 
 static void flow_offload_free_rcu(struct rcu_head *rcu_head)
@@ -402,6 +411,38 @@ void flow_offload_teardown(struct flow_offload *flow)
 	if (!test_and_set_bit(NF_FLOW_TEARDOWN, &flow->flags))
 		flow_offload_fixup_ct(flow);
 }
+
+/* Tear down the flow matching @tuple in any flowtable. The ingress interface
+ * is not known to the caller, so every netdev is tried. May sleep.
+ */
+void flow_offload_teardown_by_tuple(struct flow_offload_tuple *tuple)
+{
+	struct nf_flowtable *flowtable;
+	struct net_device *netdev;
+
+	mutex_lock(&flowtable_lock);
+	list_for_each_entry(flowtable, &flowtables, list) {
+		rcu_read_lock();
+		for_each_netdev_rcu(&init_net, netdev) {
+			struct flow_offload_tuple_rhash *tuplehash;
+			struct flow_offload *flow;
+			int dir;
+
+			tuple->iifidx = netdev->ifindex;
+			tuplehash = flow_offload_lookup(flowtable, tuple);
+			if (!tuplehash)
+				continue;
+
+			dir = tuplehash->tuple.dir;
+			flow = container_of(tuplehash, struct flow_offload,
+					    tuplehash[dir]);
+			flow_offload_teardown(flow);
+		}
+		rcu_read_unlock();
+	}
+	mutex_unlock(&flowtable_lock);
+}
+EXPORT_SYMBOL_GPL(flow_offload_teardown_by_tuple);
 EXPORT_SYMBOL_GPL(flow_offload_teardown);
 
 struct flow_offload_tuple_rhash *

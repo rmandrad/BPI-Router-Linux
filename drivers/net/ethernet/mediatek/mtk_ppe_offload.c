@@ -44,7 +44,11 @@ struct mtk_flow_data {
 		u16 sid;
 		u8 num;
 	} pppoe;
+	u32 npu_entry;
 };
+
+int (*mtk_flow_offload_get_cdrt)(struct xfrm_state *xs);
+EXPORT_SYMBOL_GPL(mtk_flow_offload_get_cdrt);
 
 static const struct rhashtable_params mtk_flow_ht_params = {
 	.head_offset = offsetof(struct mtk_flow_entry, node),
@@ -399,6 +403,13 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 			data.pppoe.sid = act->pppoe.sid;
 			data.pppoe.num++;
 			break;
+		case FLOW_ACTION_NPU_ENCAP:
+			/* Tunnel over IPsec needs the EIP-197 xfrm offload. */
+			if (act->npu.dst)
+				return -EOPNOTSUPP;
+
+			data.npu_entry = act->npu.npu_entry;
+			break;
 		default:
 			return -EOPNOTSUPP;
 		}
@@ -493,6 +504,14 @@ mtk_flow_offload_replace(struct mtk_eth *eth, struct flow_cls_offload *f,
 					 &wed_index);
 	if (err)
 		return err;
+
+	if (data.npu_entry) {
+		if (!mtk_is_netsys_v3_or_greater(eth))
+			return -EOPNOTSUPP;
+
+		mtk_foe_entry_set_tops_entry(eth, &foe, data.npu_entry);
+		mtk_foe_entry_set_tport(eth, &foe, TPORT_NPU_QDMA);
+	}
 
 	if (wed_index >= 0 && (err = mtk_wed_flow_add(wed_index)) < 0)
 		return err;

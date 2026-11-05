@@ -26,6 +26,18 @@ config MTK_SCPSYS_PM_DOMAINS
 	  Control Processor System (SCPSYS) has several power management related
 	  tasks in the system.
 
+config MTK_SCPSYS_MT7988
+	bool "MediaTek MT7988 SCPSYS power domains (TOPS)"
+	depends on ARCH_MEDIATEK || COMPILE_TEST
+	depends on PM && OF
+	select PM_GENERIC_DOMAINS
+	select REGMAP
+	select MFD_SYSCON
+	help
+	  Say y here to enable the MT7988 power domain driver, which controls
+	  the TOPS0/TOPS1 domains used by the MediaTek NPU. The domains stay
+	  off until a consumer (the NPU driver) requests them.
+
 config MTK_MFG_PM_DOMAIN
 	bool "MediaTek MFlexGraphics power domain"
 	default ARCH_MEDIATEK

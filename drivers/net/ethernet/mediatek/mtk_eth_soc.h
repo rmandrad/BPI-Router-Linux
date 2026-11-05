@@ -425,6 +425,12 @@
 
 #define TX_DMA_SPTAG_V3         BIT(27)
 
+/* QDMA V2 descriptor txd4: transmit port (tport) of the PSE */
+#define TPORT_QDMA			1
+#define TPORT_EIP197			2
+#define TPORT_EIP197_QDMA		3
+#define TPORT_NPU_QDMA			5
+#define TPORT_NPU_EIP197_QDMA		9
 /* QDMA V2 descriptor txd4 */
 #define TX_DMA_FPORT_SHIFT_V2	8
 #define TX_DMA_FPORT_MASK_V2	0xf
@@ -510,6 +516,7 @@
 /* PDMA V2 descriptor rxd6 */
 #define RX_DMA_GET_FLUSH_RSN_V2	GENMASK(2, 0)
 #define RX_DMA_GET_AGG_CNT_V2	GENMASK(23, 16)
+#define RX_DMA_GET_TOPS_CRSN(x)	(((x) >> 24) & 0xff)
 
 /* PHY Polling and SMI Master Control registers */
 #define MTK_PPSC		0x10000
@@ -1762,6 +1769,11 @@ static inline bool mtk_interface_mode_is_xgmii(struct mtk_eth *eth,
 }
 
 /* read the hardware status register */
+/* NPU tunnel offload: maps the NPU CPU reason of a decapsulated packet to
+ * the tunnel netdev it belongs to. Set by the npu driver.
+ */
+extern struct net_device *(*mtk_get_tnl_dev)(u8 tops_crsn);
+
 void mtk_stats_update_mac(struct mtk_mac *mac);
 
 void mtk_w32(struct mtk_eth *eth, u32 val, unsigned reg);

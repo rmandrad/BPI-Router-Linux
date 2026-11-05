@@ -168,6 +168,9 @@
 #include "devmem.h"
 #include "net-sysfs.h"
 
+int (*mtk_flow_tnl_offloadable)(const struct net_device_path *path);
+EXPORT_SYMBOL_GPL(mtk_flow_tnl_offloadable);
+
 static DEFINE_SPINLOCK(ptype_lock);
 struct list_head ptype_base[PTYPE_HASH_SIZE] __read_mostly;
 

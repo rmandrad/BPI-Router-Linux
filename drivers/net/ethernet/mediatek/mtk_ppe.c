@@ -12,6 +12,7 @@
 #include <net/dst_metadata.h>
 #include <net/dsa.h>
 #include <net/ipv6.h>
+#include <net/netfilter/nf_flow_table.h>
 
 #include "mtk_eth_soc.h"
 #include "mtk_ppe.h"
@@ -424,6 +425,28 @@ int mtk_foe_entry_set_pppoe(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 	return 0;
 }
 
+int mtk_foe_entry_set_tport(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+			    int tport)
+{
+	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+
+	l2->tport &= ~MTK_FOE_TPORT_IDX;
+	l2->tport |= FIELD_PREP(MTK_FOE_TPORT_IDX, tport);
+
+	return 0;
+}
+
+int mtk_foe_entry_set_tops_entry(struct mtk_eth *eth, struct mtk_foe_entry *entry,
+				 int tops_entry)
+{
+	struct mtk_foe_mac_info *l2 = mtk_foe_entry_l2(eth, entry);
+
+	l2->tinfo &= ~MTK_FOE_TOPS_ENTRY;
+	l2->tinfo |= FIELD_PREP(MTK_FOE_TOPS_ENTRY, tops_entry);
+
+	return 0;
+}
+
 int mtk_foe_entry_set_wdma(struct mtk_eth *eth, struct mtk_foe_entry *entry,
 			   int wdma_idx, int txq, int bss, int wcid,
 			   bool amsdu_en)
@@ -656,6 +679,92 @@ void mtk_foe_entry_clear(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
 	__mtk_foe_entry_clear(ppe, entry);
 	spin_unlock_bh(&ppe_lock);
 }
+
+/* Tear down all bound flows that use NPU entry (MTK_FOE_NPU_DEL) or crypto
+ * descriptor (MTK_FOE_CRYPTO_DEL) @id. Used by the offload drivers when
+ * the tunnel or crypto context goes away. May sleep.
+ *
+ * @teardown is called for every matching flow tuple (the caller passes
+ * flow_offload_teardown_by_tuple()). It is a callback because nf_flow_table
+ * can be a module while this driver is built in.
+ */
+void mtk_flow_offload_teardown_by_tnl(struct mtk_eth *eth, u32 mode, int id,
+				     void (*teardown)(struct flow_offload_tuple *tuple))
+{
+	int i, j, k;
+
+	if (!eth || !teardown || !mtk_is_netsys_v3_or_greater(eth))
+		return;
+
+	if (mode >= MTK_FOE_DEL_MAX)
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(eth->ppe); i++) {
+		struct mtk_ppe *ppe = eth->ppe[i];
+
+		if (!ppe)
+			continue;
+
+		for (j = 0; j < MTK_PPE_ENTRIES; j++) {
+			struct flow_offload_tuple tuple = {};
+			struct mtk_foe_entry foe;
+			struct mtk_foe_mac_info *l2;
+			int type, field;
+
+			spin_lock_bh(&ppe_lock);
+			memcpy(&foe, mtk_foe_get_entry(ppe, j),
+			       eth->soc->foe_entry_size);
+			spin_unlock_bh(&ppe_lock);
+
+			if (FIELD_GET(MTK_FOE_IB1_STATE, foe.ib1) !=
+			    MTK_FOE_STATE_BIND)
+				continue;
+
+			l2 = mtk_foe_entry_l2(eth, &foe);
+			if (mode == MTK_FOE_NPU_DEL)
+				field = FIELD_GET(MTK_FOE_TOPS_ENTRY, l2->tinfo);
+			else
+				field = FIELD_GET(MTK_FOE_CDRT_IDX, l2->tinfo);
+			if (field != id)
+				continue;
+
+			tuple.l4proto = (foe.ib1 & MTK_FOE_IB1_UDP) ?
+					IPPROTO_UDP : IPPROTO_TCP;
+
+			type = mtk_get_ib1_pkt_type(eth, foe.ib1);
+			switch (type) {
+			case MTK_PPE_PKT_TYPE_IPV4_HNAPT:
+				tuple.l3proto = NFPROTO_IPV4;
+				tuple.src_port = htons(foe.ipv4.orig.src_port);
+				tuple.dst_port = htons(foe.ipv4.orig.dest_port);
+				tuple.src_v4.s_addr = htonl(foe.ipv4.orig.src_ip);
+				tuple.dst_v4.s_addr = htonl(foe.ipv4.orig.dest_ip);
+				break;
+			case MTK_PPE_PKT_TYPE_IPV6_ROUTE_5T:
+				tuple.l3proto = NFPROTO_IPV6;
+				tuple.src_port = htons(foe.ipv6.src_port);
+				tuple.dst_port = htons(foe.ipv6.dest_port);
+				for (k = 0; k < 4; k++) {
+					tuple.src_v6.s6_addr32[k] =
+						htonl(foe.ipv6.src_ip[k]);
+					tuple.dst_v6.s6_addr32[k] =
+						htonl(foe.ipv6.dest_ip[k]);
+				}
+				break;
+			default:
+				/* no 5-tuple to look the flow up with */
+				continue;
+			}
+
+			teardown(&tuple);
+
+			dev_dbg(eth->dev,
+				"ppe%d: entry %x with id %d in mode %u torn down\n",
+				i, j, id, mode);
+		}
+	}
+}
+EXPORT_SYMBOL_GPL(mtk_flow_offload_teardown_by_tnl);
 
 static int
 mtk_foe_entry_commit_l2(struct mtk_ppe *ppe, struct mtk_flow_entry *entry)
