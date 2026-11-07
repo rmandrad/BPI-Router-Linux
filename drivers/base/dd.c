@@ -1551,7 +1551,8 @@ int device_schedule_reprobe(struct device *dev, unsigned int delay_ms)
 	 * would otherwise drop the last reference before the work runs.
 	 */
 	rp->parent = get_device(dev->parent);
-	rp->parent_lock = dev->parent && dev->bus->need_parent_lock;
+	rp->parent_lock = dev->parent && dev->type &&
+			  dev->type->need_parent_lock;
 	rp->drv = READ_ONCE(dev->driver);
 	INIT_DELAYED_WORK(&rp->work, device_reprobe_work_fn);
 	queue_delayed_work(system_freezable_wq, &rp->work,
