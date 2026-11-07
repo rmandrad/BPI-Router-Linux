@@ -831,4 +831,8 @@ source "drivers/crypto/starfive/Kconfig"
 source "drivers/crypto/inside-secure/eip93/Kconfig"
 source "drivers/crypto/ti/Kconfig"
 
+# EIP-197 inline IPsec for the MediaTek MT7988; the code lives with the
+# ethernet driver it depends on
+source "drivers/net/ethernet/mediatek/crypto-eip/Kconfig"
+
 endif # CRYPTO_HW
