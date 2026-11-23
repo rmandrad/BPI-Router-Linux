@@ -90,6 +90,7 @@ static const struct ieee80211_ops mt76x0e_ops = {
 	.get_antenna = mt76_get_antenna,
 	.reconfig_complete = mt76x02_reconfig_complete,
 	.set_sar_specs = mt76x0_set_sar_specs,
+	.can_aggregate_in_amsdu = mt76x02_can_aggregate_in_amsdu,
 };
 
 static int mt76x0e_init_hardware(struct mt76x02_dev *dev, bool resume)
@@ -157,7 +158,8 @@ mt76x0e_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		.txwi_size = sizeof(struct mt76x02_txwi),
 		.drv_flags = MT_DRV_TX_ALIGNED4_SKBS |
 			     MT_DRV_SW_RX_AIRTIME |
-			     MT_DRV_IGNORE_TXS_FAILED,
+			     MT_DRV_IGNORE_TXS_FAILED |
+			     MT_DRV_KEEP_REPLAYED_STA,
 		.survey_flags = SURVEY_INFO_TIME_TX,
 		.update_survey = mt76x02_update_channel,
 		.set_channel = mt76x0_set_channel,

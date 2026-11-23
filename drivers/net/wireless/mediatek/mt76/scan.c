@@ -39,8 +39,7 @@ static void mt76_scan_complete(struct mt76_dev *dev, bool abort)
 	}
 	mt76_put_vif_phy_link(phy, dev->scan.vif, dev->scan.mlink);
 	memset(&dev->scan, 0, sizeof(dev->scan));
-	if (!test_bit(MT76_MCU_RESET, &dev->phy.state))
-		ieee80211_scan_completed(phy->hw, &info);
+	ieee80211_scan_completed(phy->hw, &info);
 }
 
 void mt76_abort_scan(struct mt76_dev *dev)
@@ -49,10 +48,11 @@ void mt76_abort_scan(struct mt76_dev *dev)
 	dev->scan.beacon_wait = false;
 	spin_unlock_bh(&dev->scan_lock);
 
-	cancel_delayed_work_sync(&dev->scan_work);
+	disable_delayed_work_sync(&dev->scan_work);
 
 	mutex_lock(&dev->mutex);
 	mt76_scan_complete(dev, true);
+	enable_delayed_work(&dev->scan_work);
 	mutex_unlock(&dev->mutex);
 }
 EXPORT_SYMBOL_GPL(mt76_abort_scan);
@@ -216,7 +216,9 @@ int mt76_hw_scan(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	mutex_lock(&dev->mutex);
 
 	if (dev->scan.req || phy->roc_vif ||
-	    test_bit(MT76_MCU_RESET, &dev->phy.state)) {
+	    mt76_phy_csa_active(phy) ||
+	    test_bit(MT76_MCU_RESET, &dev->phy.state) ||
+	    test_bit(MT76_RESTART, &dev->phy.state)) {
 		ret = -EBUSY;
 		goto out;
 	}

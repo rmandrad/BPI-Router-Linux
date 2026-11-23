@@ -14,6 +14,8 @@ int mt7925e_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 	struct mt792x_dev *dev = container_of(mdev, struct mt792x_dev, mt76);
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(tx_info->skb);
 	struct ieee80211_key_conf *key = info->control.hw_key;
+	struct ieee80211_hdr *hdr = (void *)tx_info->skb->data;
+	struct ieee80211_vif *vif = info->control.vif;
 	struct mt76_connac_hw_txp *txp;
 	struct mt76_txwi_cache *t;
 	int id, pid;
@@ -24,6 +26,43 @@ int mt7925e_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 
 	if (!wcid)
 		wcid = &dev->mt76.global_wcid;
+
+	/* Split NAN mgmt TX per frame, by what is known about the destination.
+	 *
+	 * Multicast must not ride the DW-WTBL STA: a STA-type WTBL spends the
+	 * full retry budget on an unACKable multicast RA, so one frame eats a
+	 * whole DW window and the publish SDF queue backlogs.
+	 *
+	 * Unencrypted unicast is handshake traffic (SDF follow-up, NDP
+	 * request/response, pairing bootstrap). Until firmware holds the
+	 * peer's committed bitmap its availability gate has nothing to open,
+	 * so a frame steered at the peer WTBL would park behind the BY_NAN
+	 * pause; such frames ride the DW-WTBL, which firmware unpauses every
+	 * DW - the one rendezvous both peers must be awake for. Once the CRB
+	 * download latches has_commit, the frame keeps the peer's own WTBL
+	 * and firmware serves it in the committed slots, which a 2-second
+	 * handshake deadline needs (the DW alone offers only ~4 shots).
+	 *
+	 * Secured frames belong to an established peer and keep its own WTBL
+	 * and key.
+	 */
+	if (vif && vif->type == NL80211_IFTYPE_NAN &&
+	    ieee80211_is_mgmt(hdr->frame_control)) {
+		struct mt792x_vif *mvif = (void *)vif->drv_priv;
+		bool mcast = is_multicast_ether_addr(hdr->addr1);
+
+		struct mt792x_sta *peer = (!mcast && sta) ?
+			(struct mt792x_sta *)sta->drv_priv : NULL;
+
+		if (mcast && wcid == &mvif->nan_dw_wcid) {
+			wcid = &mvif->sta.deflink.wcid;
+		} else if (!mcast && !key &&
+			   !(peer && peer->nan_sched.has_commit) &&
+			   mvif->nan_dw_wcid.idx &&
+			   mvif->nan_dw_wcid.idx < MT792x_WTBL_STA) {
+			wcid = &mvif->nan_dw_wcid;
+		}
+	}
 
 	t = (struct mt76_txwi_cache *)(txwi + mdev->drv->txwi_size);
 	t->skb = tx_info->skb;
@@ -93,12 +132,19 @@ int mt7925e_mac_reset(struct mt792x_dev *dev)
 	mt76_txq_schedule_all(&dev->mphy);
 
 	mt76_worker_disable(&dev->mt76.tx_worker);
-	if (irq_map->rx.data_complete_mask)
-		napi_disable(&dev->mt76.napi[MT_RXQ_MAIN]);
-	if (irq_map->rx.wm_complete_mask)
-		napi_disable(&dev->mt76.napi[MT_RXQ_MCU]);
-	if (irq_map->rx.wm2_complete_mask)
-		napi_disable(&dev->mt76.napi[MT_RXQ_MCU_WA]);
+
+	/*
+	 * Disable the RX NAPI instances that were actually created. They are
+	 * added per allocated RX queue by mt76_dma_init(), while the interrupt
+	 * masks describe what the hardware is able to raise - on mt7925 the
+	 * tx-done queue is never allocated (only mt7928 defines that ring), so
+	 * its NAPI has no net_device and napi_disable() faults on it while
+	 * holding the RTNL, wedging the whole machine. Iterate the queues, the
+	 * same way the restore path below re-enables them.
+	 */
+	mt76_for_each_q_rx(&dev->mt76, i)
+		napi_disable(&dev->mt76.napi[i]);
+
 	if (irq_map->tx.all_complete_mask)
 		napi_disable(&dev->mt76.tx_napi);
 
@@ -139,6 +185,8 @@ int mt7925e_mac_reset(struct mt792x_dev *dev)
 	err = mt7925_run_firmware(dev);
 	if (err)
 		goto out;
+
+	mt7925e_axidma_cal_cache_init(dev);
 
 	err = mt7925_mcu_set_eeprom(dev);
 	if (err)

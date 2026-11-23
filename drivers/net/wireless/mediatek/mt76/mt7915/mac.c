@@ -1404,6 +1404,17 @@ mt7915_mac_restart(struct mt7915_dev *dev)
 			goto out;
 	}
 
+	/* the reloaded firmware counts the MIB airtime from zero */
+	if (!run_main)
+		dev->phy.counter_reset = false;
+	else if (!ret)
+		ret = mt7915_mcu_get_chan_mib_info(&dev->phy, true);
+
+	if (phy2 && !run_ext)
+		phy2->counter_reset = false;
+	else if (run_ext && !ret)
+		ret = mt7915_mcu_get_chan_mib_info(phy2, true);
+
 out:
 	/* reset done */
 	clear_bit(MT76_RESET, &dev->mphy.state);
@@ -1424,6 +1435,7 @@ out:
 static void
 mt7915_mac_full_reset(struct mt7915_dev *dev)
 {
+	struct mt7915_twt_flow *flow, *tmp;
 	struct mt76_phy *ext_phy;
 	struct mt7915_phy *phy2;
 	int i;
@@ -1460,11 +1472,22 @@ mt7915_mac_full_reset(struct mt7915_dev *dev)
 
 	mt76_reset_device(&dev->mt76);
 
-	INIT_LIST_HEAD(&dev->sta_rc_list);
-	INIT_LIST_HEAD(&dev->twt_list);
+	spin_lock_bh(&dev->mt76.sta_poll_lock);
+	while (!list_empty(&dev->sta_rc_list))
+		list_del_init(dev->sta_rc_list.next);
+	spin_unlock_bh(&dev->mt76.sta_poll_lock);
 
-	i = mt76_wcid_alloc(dev->mt76.wcid_mask, MT7915_WTBL_STA);
-	dev->mt76.global_wcid.idx = i;
+	list_for_each_entry_safe(flow, tmp, &dev->twt_list, list) {
+		struct mt7915_sta *msta;
+
+		msta = container_of(flow, struct mt7915_sta, twt.flow[flow->id]);
+		msta->twt.flowid_mask &= ~BIT(flow->id);
+		list_del_init(&flow->list);
+	}
+	dev->twt.table_mask = 0;
+	dev->twt.n_agrt = 0;
+
+	mt7915_global_wcid_init(dev);
 	dev->recovery.hw_full_reset = false;
 
 	mutex_unlock(&dev->mt76.mutex);

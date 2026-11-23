@@ -190,11 +190,20 @@ mt76_tx_status_skb_get(struct mt76_dev *dev, struct mt76_wcid *wcid, int pktid,
 		struct mt76_tx_cb *cb = mt76_tx_skb_cb(skb);
 
 		if (pktid >= 0) {
+			unsigned long timeout = MT_TX_STATUS_SKB_TIMEOUT;
+
 			if (!(cb->flags & MT_TX_CB_DMA_DONE))
 				continue;
 
-			if (time_is_after_jiffies(cb->jiffies +
-						   MT_TX_STATUS_SKB_TIMEOUT))
+			/* A frame held to the NAN DW legitimately waits up to
+			 * a full DW period (524ms) before it airs; timing its
+			 * status out earlier reports a false no-ack to the
+			 * one-shot NAN handshakes (PASN, NDP key install).
+			 */
+			if (wcid->nan_dw)
+				timeout = HZ;
+
+			if (time_is_after_jiffies(cb->jiffies + timeout))
 				continue;
 		}
 
@@ -365,6 +374,7 @@ mt76_tx(struct mt76_phy *phy, struct ieee80211_sta *sta,
 {
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 	struct ieee80211_hdr *hdr = (void *)skb->data;
+	struct mt76_dev *dev = phy->dev;
 	struct sk_buff_head *head;
 
 	if (mt76_testmode_enabled(phy)) {
@@ -388,16 +398,23 @@ mt76_tx(struct mt76_phy *phy, struct ieee80211_sta *sta,
 	else
 		head = &wcid->tx_pending;
 
-	spin_lock_bh(&head->lock);
-	__skb_queue_tail(head, skb);
-	spin_unlock_bh(&head->lock);
+	spin_lock_bh(&dev->tx_lock);
+	if (wcid != &dev->global_wcid &&
+	    rcu_access_pointer(dev->wcid[wcid->idx]) != wcid) {
+		spin_unlock_bh(&dev->tx_lock);
+		ieee80211_free_txskb(phy->hw, skb);
+		return;
+	}
 
-	spin_lock_bh(&phy->tx_lock);
+	spin_lock(&head->lock);
+	__skb_queue_tail(head, skb);
+	spin_unlock(&head->lock);
+
 	if (list_empty(&wcid->tx_list))
 		list_add_tail(&wcid->tx_list, &phy->tx_list);
-	spin_unlock_bh(&phy->tx_lock);
+	spin_unlock_bh(&dev->tx_lock);
 
-	mt76_worker_schedule(&phy->dev->tx_worker);
+	mt76_worker_schedule(&dev->tx_worker);
 }
 EXPORT_SYMBOL_GPL(mt76_tx);
 
@@ -725,6 +742,18 @@ mt76_txq_schedule_pending_wcid(struct mt76_phy *phy, struct mt76_wcid *wcid,
 		     head == &wcid->tx_offchannel))
 			qid = MT_TXQ_PSD;
 
+		/* NAN unicast mgmt (NAFs) must stay on its AC queue: the
+		 * PSD path maps to the ALTX (force-TX) hardware queue,
+		 * which escapes the per-peer STA_PAUSE availability gating
+		 * and transmits regardless of the peer's committed bitmap.
+		 */
+		if (qid == MT_TXQ_PSD && (wcid->sta || wcid->nan_dw) &&
+		    info->control.vif &&
+		    (info->control.vif->type == NL80211_IFTYPE_NAN ||
+		     info->control.vif->type == NL80211_IFTYPE_NAN_DATA) &&
+		    head != &wcid->tx_offchannel)
+			qid = skb_get_queue_mapping(skb);
+
 		q = phy->q_tx[qid];
 		if (mt76_txq_stopped(q) || test_bit(MT76_RESET, &phy->state)) {
 			ret = -1;
@@ -749,6 +778,7 @@ mt76_txq_schedule_pending_wcid(struct mt76_phy *phy, struct mt76_wcid *wcid,
 
 void mt76_txq_schedule_pending(struct mt76_phy *phy)
 {
+	struct mt76_dev *dev = phy->dev;
 	LIST_HEAD(tx_list);
 	int ret = 0;
 
@@ -758,7 +788,7 @@ void mt76_txq_schedule_pending(struct mt76_phy *phy)
 	local_bh_disable();
 	rcu_read_lock();
 
-	spin_lock(&phy->tx_lock);
+	spin_lock(&dev->tx_lock);
 	list_splice_init(&phy->tx_list, &tx_list);
 	while (!list_empty(&tx_list)) {
 		struct mt76_wcid *wcid;
@@ -766,23 +796,44 @@ void mt76_txq_schedule_pending(struct mt76_phy *phy)
 		wcid = list_first_entry(&tx_list, struct mt76_wcid, tx_list);
 		list_del_init(&wcid->tx_list);
 
-		spin_unlock(&phy->tx_lock);
+		spin_unlock(&dev->tx_lock);
 		if (ret >= 0)
 			ret = mt76_txq_schedule_pending_wcid(phy, wcid, &wcid->tx_offchannel);
 		if (ret >= 0 && !phy->offchannel)
 			ret = mt76_txq_schedule_pending_wcid(phy, wcid, &wcid->tx_pending);
-		spin_lock(&phy->tx_lock);
+		spin_lock(&dev->tx_lock);
 
 		if ((!skb_queue_empty(&wcid->tx_pending) ||
 		     !skb_queue_empty(&wcid->tx_offchannel)) &&
 		    list_empty(&wcid->tx_list))
 			list_add_tail(&wcid->tx_list, &phy->tx_list);
 	}
-	spin_unlock(&phy->tx_lock);
+	spin_unlock(&dev->tx_lock);
 
 	rcu_read_unlock();
 	local_bh_enable();
 }
+EXPORT_SYMBOL_GPL(mt76_txq_schedule_pending);
+
+void mt76_txq_purge_pending(struct mt76_phy *phy)
+{
+	struct mt76_dev *dev = phy->dev;
+	struct sk_buff_head list;
+	struct mt76_wcid *wcid;
+
+	__skb_queue_head_init(&list);
+
+	spin_lock_bh(&dev->tx_lock);
+	list_for_each_entry(wcid, &phy->tx_list, tx_list) {
+		spin_lock(&wcid->tx_pending.lock);
+		skb_queue_splice_tail_init(&wcid->tx_pending, &list);
+		spin_unlock(&wcid->tx_pending.lock);
+	}
+	spin_unlock_bh(&dev->tx_lock);
+
+	ieee80211_purge_tx_queue(phy->hw, &list);
+}
+EXPORT_SYMBOL_GPL(mt76_txq_purge_pending);
 
 void mt76_txq_schedule_all(struct mt76_phy *phy)
 {

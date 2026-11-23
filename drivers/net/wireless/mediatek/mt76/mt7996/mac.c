@@ -194,12 +194,12 @@ static int mt7996_reverse_frag0_hdr_trans(struct sk_buff *skb, u16 hdr_gap)
 	struct mt76_rx_status *status = (struct mt76_rx_status *)skb->cb;
 	struct ethhdr *eth_hdr = (struct ethhdr *)(skb->data + hdr_gap);
 	struct mt7996_sta_link *msta_link = (void *)status->wcid;
-	struct mt7996_sta *msta = msta_link->sta;
 	struct ieee80211_bss_conf *link_conf;
 	__le32 *rxd = (__le32 *)skb->data;
 	struct ieee80211_sta *sta;
 	struct ieee80211_vif *vif;
 	struct ieee80211_hdr hdr;
+	struct mt7996_sta *msta;
 	u16 frame_control;
 
 	if (le32_get_bits(rxd[3], MT_RXD3_NORMAL_ADDR_TYPE) !=
@@ -209,6 +209,10 @@ static int mt7996_reverse_frag0_hdr_trans(struct sk_buff *skb, u16 hdr_gap)
 	if (!(le32_to_cpu(rxd[1]) & MT_RXD1_NORMAL_GROUP_4))
 		return -EINVAL;
 
+	if (!msta_link)
+		return -EINVAL;
+
+	msta = msta_link->sta;
 	if (!msta || !msta->vif)
 		return -EINVAL;
 
@@ -710,12 +714,15 @@ mt7996_mac_fill_rx(struct mt7996_dev *dev, enum mt76_rxq_id q,
 		}
 	}
 
-	if (!status->wcid || !ieee80211_is_data_qos(fc) || hw_aggr)
+	if (!status->wcid || !ieee80211_is_data_qos(fc))
+		return 0;
+
+	status->qos_ctl = qos_ctl;
+	if (hw_aggr)
 		return 0;
 
 	status->aggr = unicast &&
 		       !ieee80211_is_qos_nullfunc(fc);
-	status->qos_ctl = qos_ctl;
 	status->seqno = IEEE80211_SEQ_TO_SN(seq_ctrl);
 
 	return 0;
@@ -928,7 +935,7 @@ void mt7996_mac_write_txwi(struct mt7996_dev *dev, __le32 *txwi,
 	mvif = vif ? (struct mt7996_vif *)vif->drv_priv : NULL;
 	if (mvif) {
 		if (wcid->offchannel)
-			mlink = rcu_dereference(mvif->mt76.offchannel_link);
+			mlink = mt7996_offchannel_link(wcid);
 		if (!mlink && link_id < ARRAY_SIZE(mvif->mt76.link))
 			mlink = rcu_dereference(mvif->mt76.link[link_id]);
 	}
@@ -1225,7 +1232,7 @@ int mt7996_tx_prepare_skb(struct mt76_dev *mdev, void *txwi_ptr,
 
 		if (mvif) {
 			if (wcid->offchannel)
-				mlink = rcu_dereference(mvif->mt76.offchannel_link);
+				mlink = mt7996_offchannel_link(wcid);
 			if (!mlink && wcid->link_id < ARRAY_SIZE(mvif->mt76.link))
 				mlink = rcu_dereference(mvif->mt76.link[wcid->link_id]);
 
@@ -1538,7 +1545,8 @@ mt7996_mac_add_txs_skb(struct mt7996_dev *dev, struct mt76_wcid *wcid,
 		}
 	}
 
-	if (mtk_wed_device_active(&dev->mt76.mmio.wed) && wcid->sta) {
+	if ((mtk_wed_device_active(&dev->mt76.mmio.wed) ||
+	     mt76_npu_device_active(&dev->mt76)) && wcid->sta) {
 		struct ieee80211_sta *sta;
 		u8 tid;
 
@@ -1971,6 +1979,9 @@ void mt7996_rro_rx_process(struct mt76_dev *mdev, void *data)
 	struct mt7996_msdu_page *p = NULL;
 	int i, seq_num = 0;
 
+	if (seq_id > MT7996_RRO_MAX_SESSION)
+		return;
+
 	for (i = 0; i < ind_count; i++) {
 		struct mt7996_wed_rro_addr *e;
 		struct mt76_rx_status *status;
@@ -2324,12 +2335,24 @@ void mt7996_tx_token_put(struct mt7996_dev *dev)
 	}
 }
 
+static void
+mt7996_wed_stop(struct mt7996_dev *dev)
+{
+	if (mtk_wed_device_active(&dev->mt76.mmio.wed_hif2))
+		mtk_wed_device_stop(&dev->mt76.mmio.wed_hif2);
+
+	if (mtk_wed_device_active(&dev->mt76.mmio.wed))
+		mtk_wed_device_stop(&dev->mt76.mmio.wed);
+}
+
 static int
 mt7996_mac_restart(struct mt7996_dev *dev)
 {
 	struct mt76_dev *mdev = &dev->mt76;
 	struct mt7996_phy *phy;
 	int i, ret;
+
+	mt7996_wed_stop(dev);
 
 	if (dev->hif2) {
 		mt76_wr(dev, MT_INT1_MASK_CSR, 0x0);
@@ -2448,6 +2471,18 @@ mt7996_mac_restart(struct mt7996_dev *dev)
 			goto out;
 	}
 
+	/* the reloaded firmware counts the MIB airtime from zero */
+	mt7996_for_each_phy(dev, phy) {
+		if (!test_bit(MT76_STATE_RUNNING, &phy->mt76->state)) {
+			phy->counter_reset = false;
+			continue;
+		}
+
+		ret = mt7996_mcu_get_chan_mib_info(phy, true);
+		if (ret)
+			goto out;
+	}
+
 out:
 	/* reset done */
 	mt7996_for_each_phy(dev, phy)
@@ -2499,12 +2534,14 @@ static void
 mt7996_mac_full_reset(struct mt7996_dev *dev)
 {
 	struct ieee80211_hw *hw = mt76_hw(dev);
+	struct mt7996_twt_flow *flow, *tmp;
 	struct mt7996_phy *phy;
 	LIST_HEAD(list);
 	int i;
 
 	dev->recovery.hw_full_reset = true;
 
+	set_bit(MT76_RESTART, &dev->mphy.state);
 	set_bit(MT76_MCU_RESET, &dev->mphy.state);
 	wake_up(&dev->mt76.mcu.wait);
 	ieee80211_stop_queues(hw);
@@ -2537,8 +2574,21 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
 						   IEEE80211_IFACE_SKIP_SDATA_NOT_IN_DRIVER,
 						   mt7996_mac_reset_vif_iter, dev);
 
-	INIT_LIST_HEAD(&dev->sta_rc_list);
-	INIT_LIST_HEAD(&dev->twt_list);
+	spin_lock_bh(&dev->mt76.sta_poll_lock);
+	while (!list_empty(&dev->sta_rc_list))
+		list_del_init(dev->sta_rc_list.next);
+	spin_unlock_bh(&dev->mt76.sta_poll_lock);
+
+	list_for_each_entry_safe(flow, tmp, &dev->twt_list, list) {
+		struct mt7996_sta_link *msta_link;
+
+		msta_link = container_of(flow, struct mt7996_sta_link,
+					 twt.flow[flow->id]);
+		msta_link->twt.flowid_mask &= ~BIT(flow->id);
+		list_del_init(&flow->list);
+	}
+	dev->twt.table_mask = 0;
+	dev->twt.n_agrt = 0;
 
 	spin_lock_bh(&dev->wed_rro.lock);
 	list_splice_init(&dev->wed_rro.poll_list, &list);
@@ -2553,8 +2603,7 @@ mt7996_mac_full_reset(struct mt7996_dev *dev)
 		kfree(e);
 	}
 
-	i = mt76_wcid_alloc(dev->mt76.wcid_mask, MT7996_WTBL_STA);
-	dev->mt76.global_wcid.idx = i;
+	mt7996_global_wcid_init(dev);
 	dev->recovery.hw_full_reset = false;
 
 	mutex_unlock(&dev->mt76.mutex);
@@ -2605,12 +2654,7 @@ void mt7996_mac_reset_work(struct work_struct *work)
 	dev_info(dev->mt76.dev,"\n%s L1 SER recovery start.",
 		 wiphy_name(hw->wiphy));
 
-	if (mtk_wed_device_active(&dev->mt76.mmio.wed_hif2))
-		mtk_wed_device_stop(&dev->mt76.mmio.wed_hif2);
-
-	if (mtk_wed_device_active(&dev->mt76.mmio.wed))
-		mtk_wed_device_stop(&dev->mt76.mmio.wed);
-
+	mt7996_wed_stop(dev);
 	mt7996_npu_hw_stop(dev);
 	ieee80211_stop_queues(mt76_hw(dev));
 

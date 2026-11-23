@@ -59,6 +59,8 @@ static int mt7996_start(struct ieee80211_hw *hw)
 
 	flush_work(&dev->init_work);
 
+	clear_bit(MT76_RESTART, &dev->mphy.state);
+
 	mutex_lock(&dev->mt76.mutex);
 	ret = mt7996_mcu_set_hdr_trans(dev, true);
 	if (!ret && !is_mt7996(&dev->mt76)) {
@@ -205,9 +207,6 @@ mt7996_set_hw_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	if (!link)
 		return 0;
 
-	if (!mt7996_vif_link_phy(link))
-		return 0;
-
 	if (sta) {
 		struct mt7996_sta *msta;
 
@@ -219,6 +218,9 @@ mt7996_set_hw_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 		if (!msta_link->wcid.sta)
 			return -EOPNOTSUPP;
 	} else {
+		if (!mt7996_vif_link_phy(link))
+			return 0;
+
 		msta_link = &link->msta_link;
 	}
 	wcid_keyidx = &msta_link->wcid.hw_key_idx;
@@ -603,6 +605,17 @@ static void mt7996_phy_set_rxfilter(struct mt7996_phy *phy)
 		mt76_set(dev, MT_WF_RFCR1(phy->mt76->band_idx), ctl_flags);
 	else
 		mt76_clear(dev, MT_WF_RFCR1(phy->mt76->band_idx), ctl_flags);
+
+	/* Firmware sniffer mode clears the drop of trigger frames for other
+	 * stations, and the band's RX stops where it accepts FCS-failed
+	 * frames without it.
+	 */
+	if (!(filter & MT_WF_RFCR_DROP_FCSFAIL))
+		mt76_set(dev, MT_WF_RFCR1(phy->mt76->band_idx),
+			 MT_WF_RFCR1_DROP_NO2ME_TF);
+	else if (!(filter & MT_WF_RFCR_DROP_OTHER_UC))
+		mt76_clear(dev, MT_WF_RFCR1(phy->mt76->band_idx),
+			   MT_WF_RFCR1_DROP_NO2ME_TF);
 }
 
 static bool mt7996_monitor_active(struct mt7996_dev *dev)
@@ -637,8 +650,8 @@ static void mt7996_set_monitor(struct mt7996_phy *phy, bool enabled)
 		       MT_DMA_DCR0_RXD_G5_EN, enabled);
 	mt76_rmw_field(dev, MT_MDP_DCR0,
 		       MT_MDP_DCR0_RX_HDR_TRANS_EN, !mt7996_monitor_active(dev));
-	mt7996_phy_set_rxfilter(phy);
 	mt7996_mcu_set_sniffer_mode(phy, enabled);
+	mt7996_phy_set_rxfilter(phy);
 }
 
 static int mt7996_add_interface(struct ieee80211_hw *hw,
@@ -1385,6 +1398,11 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
 	if (!msta_link)
 		return;
 
+	if (flush) {
+		rcu_assign_pointer(msta->link[link_id], NULL);
+		rcu_assign_pointer(dev->mt76.wcid[msta_link->wcid.idx], NULL);
+	}
+
 	spin_lock_bh(&dev->mt76.sta_poll_lock);
 	if (!list_empty(&msta_link->wcid.poll_list))
 		list_del_init(&msta_link->wcid.poll_list);
@@ -1410,8 +1428,6 @@ void mt7996_mac_sta_remove_link(struct mt7996_dev *dev,
 		if (phy)
 			phy->mt76->num_sta--;
 
-		rcu_assign_pointer(msta->link[link_id], NULL);
-		rcu_assign_pointer(dev->mt76.wcid[msta_link->wcid.idx], NULL);
 		mt76_wcid_mask_clear(dev->mt76.wcid_mask, msta_link->wcid.idx);
 		if (msta_link != &msta->deflink)
 			kfree_rcu(msta_link, rcu_head);
@@ -1575,6 +1591,9 @@ mt7996_mac_sta_links_event(struct mt7996_dev *dev, struct ieee80211_vif *vif,
 
 		switch (ev) {
 		case MT76_STA_EVENT_ASSOC:
+			msta_link->wcid.sta = 1;
+			msta_link->wcid.sta_disabled = 0;
+
 			err = mt7996_mcu_add_sta(dev, link_conf, link_sta,
 						 link, msta_link,
 						 CONN_STATE_CONNECT, true);
@@ -1789,6 +1808,23 @@ mt7996_mac_sta_links_ba_add(struct mt7996_dev *dev, struct ieee80211_vif *vif,
 }
 
 static int
+mt7996_mac_sta_link_resume(struct mt7996_dev *dev, struct ieee80211_vif *vif,
+			   struct mt7996_vif_link *link,
+			   struct mt7996_sta_link *msta_link)
+{
+	int err;
+
+	err = mt7996_mcu_wtbl_update_hdr_trans(dev, vif, link, msta_link);
+	if (err)
+		return err;
+
+	return mt7996_mcu_set_vow_drr_ctrl(dev, link->mt76.band_idx,
+					   &msta_link->wcid, &link->mt76,
+					   VOW_DRR_CTRL_STA_ALL,
+					   mt7996_sta_airtime_weight(msta_link->sta));
+}
+
+static int
 mt7996_mac_sta_links_sync(struct mt7996_dev *dev, struct ieee80211_vif *vif,
 			  struct ieee80211_sta *sta, unsigned long links,
 			  unsigned long add)
@@ -1825,8 +1861,8 @@ mt7996_mac_sta_links_sync(struct mt7996_dev *dev, struct ieee80211_vif *vif,
 		link = mt7996_vif_link(dev, vif, link_id);
 
 		if (msta->conn_state != CONN_STATE_PORT_SECURE) {
-			err = mt7996_mcu_wtbl_update_hdr_trans(dev, vif, link,
-							       msta_link);
+			err = mt7996_mac_sta_link_resume(dev, vif, link,
+							 msta_link);
 			if (err)
 				return err;
 		}
@@ -1971,9 +2007,20 @@ mt7996_mac_sta_remove(struct mt7996_dev *dev, struct ieee80211_vif *vif,
 		      struct ieee80211_sta *sta)
 {
 	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
+	struct mt7996_sta_link *msta_link = &msta->deflink;
 	int i;
 
 	mutex_lock(&dev->mt76.mutex);
+
+	/* the firmware can still hold an agreement whose delete failed, so
+	 * its table entry stays counted
+	 */
+	for (i = 0; i < ARRAY_SIZE(msta_link->twt.flow); i++) {
+		if (msta_link->twt.flowid_mask & BIT(i))
+			list_del_init(&msta_link->twt.flow[i].list);
+	}
+	msta_link->twt.flowid_mask = 0;
+
 	for (i = 0; i < ARRAY_SIZE(msta->link); i++)
 		mt7996_mac_sta_remove_link(dev, sta, i, true);
 	mutex_unlock(&dev->mt76.mutex);
@@ -2530,6 +2577,7 @@ static void mt7996_link_rate_ctrl_update(void *data,
 {
 	struct mt7996_sta *msta = msta_link->sta;
 	struct mt7996_phy *phy = mt7996_vif_link_phy(&msta->vif->deflink);
+	u8 link_id = msta_link->wcid.link_id;
 	struct mt7996_dev *dev;
 	u32 *changed = data;
 
@@ -2540,7 +2588,8 @@ static void mt7996_link_rate_ctrl_update(void *data,
 	spin_lock_bh(&dev->mt76.sta_poll_lock);
 
 	msta_link->changed |= *changed;
-	if (list_empty(&msta_link->rc_list))
+	if (list_empty(&msta_link->rc_list) &&
+	    rcu_access_pointer(msta->link[link_id]) == msta_link)
 		list_add_tail(&msta_link->rc_list, &dev->sta_rc_list);
 
 	spin_unlock_bh(&dev->mt76.sta_poll_lock);
@@ -2607,6 +2656,38 @@ mt7996_set_bitrate_mask(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	return 0;
 }
 
+static void mt7996_sta_set_airtime_weight(struct ieee80211_hw *hw,
+					  struct ieee80211_vif *vif,
+					  struct ieee80211_sta *sta, u16 weight)
+{
+	struct mt7996_sta *msta = (struct mt7996_sta *)sta->drv_priv;
+	struct mt7996_dev *dev = mt7996_hw_dev(hw);
+	struct ieee80211_link_sta *link_sta;
+	unsigned int link_id;
+
+	mutex_lock(&dev->mt76.mutex);
+
+	msta->airtime_weight = weight;
+	for_each_sta_active_link(vif, sta, link_sta, link_id) {
+		struct mt7996_sta_link *msta_link;
+		struct mt7996_vif_link *link;
+
+		link = mt7996_vif_link(dev, vif, link_id);
+		if (!link)
+			continue;
+
+		msta_link = mt7996_sta_link_protected(dev, msta, link_id);
+		if (!msta_link || !msta_link->connected)
+			continue;
+
+		mt7996_mcu_set_vow_drr_ctrl(dev, link->mt76.band_idx,
+					    &msta_link->wcid, &link->mt76,
+					    VOW_DRR_CTRL_STA_ALL, weight);
+	}
+
+	mutex_unlock(&dev->mt76.mutex);
+}
+
 static void mt7996_sta_set_4addr(struct ieee80211_hw *hw,
 				 struct ieee80211_vif *vif,
 				 struct ieee80211_sta *sta,
@@ -2619,7 +2700,7 @@ static void mt7996_sta_set_4addr(struct ieee80211_hw *hw,
 
 	mutex_lock(&dev->mt76.mutex);
 
-	assign_bit(MT_WCID_FLAG_HDR_TRANS, &msta->wcid_flags, enabled);
+	assign_bit(MT_WCID_FLAG_4ADDR, &msta->wcid_flags, enabled);
 	for_each_sta_active_link(vif, sta, link_sta, link_id) {
 		struct mt7996_sta_link *msta_link;
 		struct mt7996_vif_link *link;
@@ -2655,7 +2736,7 @@ static void mt7996_sta_set_decap_offload(struct ieee80211_hw *hw,
 
 	mutex_lock(&dev->mt76.mutex);
 
-	assign_bit(MT_WCID_FLAG_4ADDR, &msta->wcid_flags, enabled);
+	assign_bit(MT_WCID_FLAG_HDR_TRANS, &msta->wcid_flags, enabled);
 	for_each_sta_active_link(vif, sta, link_sta, link_id) {
 		struct mt7996_sta_link *msta_link;
 		struct mt7996_vif_link *link;
@@ -3213,6 +3294,7 @@ const struct ieee80211_ops mt7996_ops = {
 	.sta_statistics = mt7996_sta_statistics,
 	.sta_set_4addr = mt7996_sta_set_4addr,
 	.sta_set_decap_offload = mt7996_sta_set_decap_offload,
+	.sta_set_airtime_weight = mt7996_sta_set_airtime_weight,
 	.add_twt_setup = mt7996_mac_add_twt_setup,
 	.twt_teardown_request = mt7996_twt_teardown_request,
 #ifdef CONFIG_MAC80211_DEBUGFS

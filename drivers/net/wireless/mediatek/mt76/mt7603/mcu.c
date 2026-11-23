@@ -26,6 +26,8 @@ mt7603_mcu_parse_response(struct mt76_dev *mdev, int cmd,
 		dev->mcu_hang = MT7603_WATCHDOG_TIMEOUT;
 		return -ETIMEDOUT;
 	}
+	if (skb->len < sizeof(*rxd))
+		return -EINVAL;
 
 	rxd = (struct mt7603_mcu_rxd *)skb->data;
 	if (seq != rxd->seq)
@@ -402,8 +404,8 @@ int mt7603_mcu_set_channel(struct mt7603_dev *dev)
 		.tx_streams = n_chains,
 		.rx_streams = n_chains,
 	};
-	s8 tx_power = hw->conf.power_level * 2;
 	int i, ret;
+	s8 tx_power;
 
 	if (dev->mphy.chandef.width == NL80211_CHAN_WIDTH_40) {
 		req.bw = MT_BW_40;
@@ -413,9 +415,7 @@ int mt7603_mcu_set_channel(struct mt7603_dev *dev)
 			req.center_chan -= 2;
 	}
 
-	tx_power = mt76_get_sar_power(&dev->mphy, chandef->chan, tx_power);
-	if (dev->mphy.antenna_mask == 3)
-		tx_power -= 6;
+	tx_power = mt76_get_power_bound(&dev->mphy, hw->conf.power_level);
 	tx_power = min(tx_power, dev->tx_power_limit);
 
 	dev->mphy.txpower_cur = tx_power;

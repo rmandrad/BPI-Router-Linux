@@ -200,11 +200,17 @@ static void mt7915_unregister_thermal(struct mt7915_phy *phy)
 {
 	struct wiphy *wiphy = phy->mt76->hw->wiphy;
 
+	if (phy->tzone) {
+		devm_thermal_of_zone_unregister(phy->dev->mt76.dev, phy->tzone);
+		phy->tzone = NULL;
+	}
+
 	if (!phy->cdev)
 		return;
 
 	sysfs_remove_link(&wiphy->dev.kobj, "cooling_device");
 	thermal_cooling_device_unregister(phy->cdev);
+	phy->cdev = NULL;
 }
 
 static int mt7915_thermal_init(struct mt7915_phy *phy)
@@ -238,8 +244,8 @@ static int mt7915_thermal_init(struct mt7915_phy *phy)
 	if (IS_ERR(phy->tzone)) {
 		if (PTR_ERR(phy->tzone) != -ENODEV)
 			dev_warn(phy->dev->mt76.dev,
-				 "failed to register thermal zone: %ld\n",
-				 PTR_ERR(phy->tzone));
+				 "failed to register thermal zone %d: %ld\n",
+				 phy->mt76->band_idx, PTR_ERR(phy->tzone));
 		phy->tzone = NULL;
 	}
 
@@ -248,7 +254,12 @@ static int mt7915_thermal_init(struct mt7915_phy *phy)
 
 	hwmon = devm_hwmon_device_register_with_groups(&wiphy->dev, name, phy,
 						       mt7915_hwmon_groups);
-	return PTR_ERR_OR_ZERO(hwmon);
+	if (IS_ERR(hwmon)) {
+		mt7915_unregister_thermal(phy);
+		return PTR_ERR(hwmon);
+	}
+
+	return 0;
 }
 
 static void mt7915_led_set_config(struct led_classdev *led_cdev,
@@ -647,6 +658,33 @@ mt7915_init_led_mux(struct mt7915_dev *dev)
 	}
 }
 
+void mt7915_vow_init(struct mt7915_dev *dev)
+{
+	dev->vow_atf_en = true;
+
+	mt7915_mcu_set_vow_drr_ctrl(dev, NULL, VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND, 0);
+	mt7915_mcu_set_vow_drr_ctrl(dev, NULL, VOW_DRR_CTRL_AIRTIME_QUANTUM_ALL, 0);
+	mt7915_mcu_set_vow_feature_ctrl(dev);
+}
+
+/* Assignment of BSS group index aligns FW.
+ * 0: Band 0 - BSS 0
+ * 4: Band 1 - BSS 0
+ * 9..23: Band 0 - BSS 0x11..0x1f
+ * 25..39: Band 1 - BSS 0x11..0x1f
+ */
+u8 mt7915_vow_sta_bss_grp(struct mt76_vif_link *mvif)
+{
+	const u8 hw_bssid_num = HW_BSSID_MAX + 1;
+
+	if (mvif->omac_idx < hw_bssid_num)
+		return mvif->band_idx * hw_bssid_num + mvif->omac_idx;
+
+	/* Extended BSS */
+	return hw_bssid_num * 2 + (mvif->band_idx == 0 ? 1 : 17) +
+	       mvif->omac_idx - EXT_BSSID_1;
+}
+
 void mt7915_mac_init(struct mt7915_dev *dev)
 {
 	int i;
@@ -674,6 +712,9 @@ void mt7915_mac_init(struct mt7915_dev *dev)
 		mt7915_mac_init_band(dev, i);
 
 	mt7915_init_led_mux(dev);
+
+	if (!is_mt7915(&dev->mt76))
+		mt7915_vow_init(dev);
 }
 
 int mt7915_txbf_init(struct mt7915_dev *dev)
@@ -854,10 +895,25 @@ static bool mt7915_band_config(struct mt7915_dev *dev)
 	return ret;
 }
 
+int mt7915_global_wcid_init(struct mt7915_dev *dev)
+{
+	int idx = mt76_wcid_alloc(dev->mt76.wcid_mask, MT7915_WTBL_STA);
+
+	if (idx)
+		return -ENOSPC;
+
+	dev->mt76.global_wcid.idx = idx;
+	dev->mt76.global_wcid.hw_key_idx = -1;
+	dev->mt76.global_wcid.tx_info |= MT_WCID_TX_INFO_SET;
+	rcu_assign_pointer(dev->mt76.wcid[idx], &dev->mt76.global_wcid);
+
+	return 0;
+}
+
 static int
 mt7915_init_hardware(struct mt7915_dev *dev, struct mt7915_phy *phy2)
 {
-	int ret, idx;
+	int ret;
 
 	mt76_wr(dev, MT_INT_MASK_CSR, 0);
 	mt76_wr(dev, MT_INT_SOURCE_CSR, ~0);
@@ -884,17 +940,7 @@ mt7915_init_hardware(struct mt7915_dev *dev, struct mt7915_phy *phy2)
 			return ret;
 	}
 
-	/* Beacon and mgmt frames should occupy wcid 0 */
-	idx = mt76_wcid_alloc(dev->mt76.wcid_mask, MT7915_WTBL_STA);
-	if (idx)
-		return -ENOSPC;
-
-	dev->mt76.global_wcid.idx = idx;
-	dev->mt76.global_wcid.hw_key_idx = -1;
-	dev->mt76.global_wcid.tx_info |= MT_WCID_TX_INFO_SET;
-	rcu_assign_pointer(dev->mt76.wcid[idx], &dev->mt76.global_wcid);
-
-	return 0;
+	return mt7915_global_wcid_init(dev);
 }
 
 void mt7915_set_stream_vht_txbf_caps(struct mt7915_phy *phy)

@@ -134,6 +134,16 @@ struct mt7915_twt_flow {
 
 DECLARE_EWMA(avg_signal, 10, 8)
 
+#define UMAC_BWC_GROUP_MIN	40
+
+enum vow_drr_ctrl_id {
+	VOW_DRR_CTRL_STA_ALL = 0x00,
+	VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND = 0x10,
+	VOW_DRR_CTRL_AIRTIME_QUANTUM_ALL = 0x28,
+	VOW_DRR_CTRL_STA_PAUSE = 0x30,
+};
+
+
 struct mt7915_sta {
 	struct mt76_wcid wcid; /* must be first */
 
@@ -141,6 +151,7 @@ struct mt7915_sta {
 
 	struct list_head rc_list;
 	u32 airtime_ac[8];
+	u16 airtime_weight;
 
 	int ack_signal;
 	struct ewma_avg_signal avg_ack_signal;
@@ -227,6 +238,7 @@ struct mt7915_phy {
 	struct mt76_mib_stats mib;
 	struct mt76_channel_state state_ts;
 
+	bool counter_reset;
 	bool sku_limit_en:1;
 	bool sku_path_en:1;
 
@@ -324,6 +336,8 @@ struct mt7915_dev {
 		u16 table_mask;
 		u8 n_agrt;
 	} twt;
+
+	bool vow_atf_en;
 
 	struct reset_control *rstc;
 	void __iomem *dcm;
@@ -454,6 +468,7 @@ u32 mt7915_wed_init_buf(void *ptr, dma_addr_t phys, int token_id);
 
 int mt7915_register_device(struct mt7915_dev *dev);
 void mt7915_unregister_device(struct mt7915_dev *dev);
+int mt7915_global_wcid_init(struct mt7915_dev *dev);
 int mt7915_eeprom_init(struct mt7915_dev *dev);
 void mt7915_eeprom_parse_hw_cap(struct mt7915_dev *dev,
 				struct mt7915_phy *phy);
@@ -519,6 +534,12 @@ int mt7915_mcu_set_mac(struct mt7915_dev *dev, int band, bool enable,
 int mt7915_mcu_set_test_param(struct mt7915_dev *dev, u8 param, bool test_mode,
 			      u8 en);
 int mt7915_mcu_set_ser(struct mt7915_dev *dev, u8 action, u8 set, u8 band);
+int mt7915_mcu_set_vow_drr_ctrl(struct mt7915_dev *dev, struct mt7915_sta *msta,
+				enum vow_drr_ctrl_id id, u16 weight);
+int mt7915_mcu_set_vow_feature_ctrl(struct mt7915_dev *dev);
+int mt7915_mcu_set_vow_band(struct mt7915_dev *dev, struct mt7915_vif *mvif);
+void mt7915_vow_init(struct mt7915_dev *dev);
+u8 mt7915_vow_sta_bss_grp(struct mt76_vif_link *mvif);
 int mt7915_mcu_set_sku_en(struct mt7915_phy *phy);
 int mt7915_mcu_set_txpower_sku(struct mt7915_phy *phy);
 int mt7915_mcu_get_txpower_sku(struct mt7915_phy *phy, s8 *txpower, int len,
@@ -549,6 +570,7 @@ int mt7915_mcu_rf_regval(struct mt7915_dev *dev, u32 regidx, u32 *val, bool set)
 int mt7915_mcu_wa_cmd(struct mt7915_dev *dev, int cmd, u32 a1, u32 a2, u32 a3);
 int mt7915_mcu_fw_log_2_host(struct mt7915_dev *dev, u8 type, u8 ctrl);
 int mt7915_mcu_fw_dbg_ctrl(struct mt7915_dev *dev, u32 module, u8 level);
+int mt7915_mcu_fw_debug_set(struct mt7915_dev *dev, u8 type, bool load);
 void mt7915_mcu_rx_event(struct mt7915_dev *dev, struct sk_buff *skb);
 void mt7915_mcu_exit(struct mt7915_dev *dev);
 

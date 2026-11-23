@@ -3,6 +3,7 @@
 
 #include <linux/fs.h>
 #include <linux/firmware.h>
+#include <linux/of.h>
 #include "mt7921.h"
 #include "regd.h"
 #include "mcu.h"
@@ -61,10 +62,11 @@ int mt7921_mcu_parse_response(struct mt76_dev *mdev, int cmd,
 
 		skb_pull(skb, sizeof(*rxd));
 		event = (struct mt76_connac_mcu_uni_event *)skb->data;
-		ret = le32_to_cpu(event->status);
 		/* skip invalid event */
 		if (mcu_cmd != event->cid)
 			ret = -EAGAIN;
+		else
+			ret = mt76_connac_mcu_status_err(le32_to_cpu(event->status));
 	} else if (cmd == MCU_CE_QUERY(REG_READ)) {
 		struct mt76_connac_mcu_reg_event *event;
 
@@ -304,7 +306,7 @@ mt7921_mcu_rssi_monitor_iter(void *priv, u8 *mac,
 	else
 		nl_event = NL80211_CQM_RSSI_THRESHOLD_EVENT_LOW;
 
-	ieee80211_cqm_rssi_notify(vif, nl_event, rssi, GFP_KERNEL);
+	ieee80211_cqm_rssi_notify(vif, nl_event, rssi, GFP_ATOMIC);
 }
 
 static void
@@ -325,6 +327,12 @@ mt7921_mcu_rx_unsolicited_event(struct mt792x_dev *dev, struct sk_buff *skb)
 {
 	struct mt76_connac2_mcu_rxd *rxd;
 
+	/* Serialize event side effects with mt7921_unregister_device(). */
+	spin_lock_bh(&dev->mcu_event_lock);
+	if (dev->mcu_events_stopped ||
+	    test_bit(MT76_REMOVED, &dev->mphy.state))
+		goto free_skb;
+
 	rxd = (struct mt76_connac2_mcu_rxd *)skb->data;
 	switch (rxd->eid) {
 	case MCU_EVENT_BSS_BEACON_LOSS:
@@ -333,7 +341,7 @@ mt7921_mcu_rx_unsolicited_event(struct mt792x_dev *dev, struct sk_buff *skb)
 	case MCU_EVENT_SCHED_SCAN_DONE:
 	case MCU_EVENT_SCAN_DONE:
 		mt7921_mcu_scan_event(dev, skb);
-		return;
+		goto out;
 	case MCU_EVENT_DBG_MSG:
 		mt7921_mcu_debug_msg_event(dev, skb);
 		break;
@@ -341,7 +349,7 @@ mt7921_mcu_rx_unsolicited_event(struct mt792x_dev *dev, struct sk_buff *skb)
 		dev->fw_assert = true;
 		mt76_connac_mcu_coredump_event(&dev->mt76, skb,
 					       &dev->coredump);
-		return;
+		goto out;
 	case MCU_EVENT_LP_INFO:
 		mt7921_mcu_low_power_event(dev, skb);
 		break;
@@ -354,7 +362,10 @@ mt7921_mcu_rx_unsolicited_event(struct mt792x_dev *dev, struct sk_buff *skb)
 	default:
 		break;
 	}
+free_skb:
 	dev_kfree_skb(skb);
+out:
+	spin_unlock_bh(&dev->mcu_event_lock);
 }
 
 static void
@@ -362,6 +373,11 @@ mt7921_mcu_uni_rx_unsolicited_event(struct mt792x_dev *dev,
 				    struct sk_buff *skb)
 {
 	struct mt76_connac2_mcu_rxd *rxd;
+
+	spin_lock_bh(&dev->mcu_event_lock);
+	if (dev->mcu_events_stopped ||
+	    test_bit(MT76_REMOVED, &dev->mphy.state))
+		goto out;
 
 	rxd = (struct mt76_connac2_mcu_rxd *)skb->data;
 
@@ -372,6 +388,8 @@ mt7921_mcu_uni_rx_unsolicited_event(struct mt792x_dev *dev,
 	default:
 		break;
 	}
+out:
+	spin_unlock_bh(&dev->mcu_event_lock);
 	dev_kfree_skb(skb);
 }
 
@@ -564,9 +582,10 @@ static void mt7921_mcu_parse_tx_resource(struct mt76_dev *dev,
 	sdio->sched.deficit = tx_res->pp_padding;
 }
 
-static void mt7921_mcu_parse_phy_cap(struct mt76_dev *dev,
+static void mt7921_mcu_parse_phy_cap(struct mt76_dev *mdev,
 				     struct sk_buff *skb, int len)
 {
+	struct mt792x_dev *dev = container_of(mdev, struct mt792x_dev, mt76);
 	struct mt7921_phy_cap {
 		u8 ht;
 		u8 vht;
@@ -586,16 +605,28 @@ static void mt7921_mcu_parse_phy_cap(struct mt76_dev *dev,
 		WF0_24G,
 		WF0_5G
 	};
+	bool changed;
+	u8 mask;
 
 	if (len < offsetofend(struct mt7921_phy_cap, hw_path))
 		return;
 
 	cap = (struct mt7921_phy_cap *)skb->data;
 
-	dev->phy.antenna_mask = BIT(cap->nss) - 1;
-	dev->phy.chainmask = dev->phy.antenna_mask;
-	dev->phy.cap.has_2ghz = cap->hw_path & BIT(WF0_24G);
-	dev->phy.cap.has_5ghz = cap->hw_path & BIT(WF0_5G);
+	mask = BIT(cap->nss) - 1;
+	if (dev->hw_init_done)
+		mask &= mdev->phy.antenna_mask;
+	changed = mask != mdev->phy.antenna_mask;
+
+	mdev->phy.antenna_mask = mask;
+	mdev->phy.chainmask = mask;
+	mdev->phy.cap.has_2ghz = cap->hw_path & BIT(WF0_24G);
+	mdev->phy.cap.has_5ghz = cap->hw_path & BIT(WF0_5G);
+
+	if (dev->hw_init_done && changed) {
+		mt76_set_stream_caps(&mdev->phy, true);
+		mt7921_set_stream_he_caps(&dev->phy);
+	}
 }
 
 static int mt7921_mcu_get_nic_capability(struct mt792x_phy *mphy)
@@ -699,6 +730,10 @@ int mt7921_run_firmware(struct mt792x_dev *dev)
 	if (err)
 		return err;
 	set_bit(MT76_STATE_MCU_RUNNING, &dev->mphy.state);
+
+	err = mt7921_mcu_set_thermal_protect(dev);
+	if (err)
+		return err;
 
 	return mt7921_mcu_fw_log_2_host(dev, 1);
 }
@@ -946,7 +981,8 @@ int mt7921_mcu_set_chan_info(struct mt792x_phy *phy, int cmd)
 		req.channel_band = chandef->chan->band;
 
 	if (cmd == MCU_EXT_CMD(SET_RX_PATH) ||
-	    dev->mt76.hw->conf.flags & IEEE80211_CONF_MONITOR)
+	    (dev->mt76.hw->conf.flags & IEEE80211_CONF_MONITOR &&
+	     !phy->mt76->offchannel))
 		req.switch_reason = CH_SWITCH_NORMAL;
 	else if (phy->mt76->offchannel)
 		req.switch_reason = CH_SWITCH_SCAN_BYPASS_DPD;
@@ -1259,7 +1295,7 @@ int mt7921_mcu_config_sniffer(struct mt792x_vif *vif,
 			.len = cpu_to_le16(sizeof(req.tlv)),
 			.control_ch = chandef->chan->hw_value,
 			.center_ch = ieee80211_frequency_to_channel(freq1),
-			.drop_err = 1,
+			.drop_err = !(vif->phy->rxfilter & MT7921_FILTER_FCSFAIL),
 		},
 	};
 	if (chandef->chan->band < ARRAY_SIZE(ch_band))
@@ -1387,6 +1423,7 @@ int __mt7921_mcu_set_clc(struct mt792x_dev *dev, u8 *alpha2,
 		.acpi_conf = mt792x_acpi_get_flags(&dev->phy),
 		.mtcl_conf = mt792x_acpi_get_mtcl_conf(&dev->phy, alpha2),
 	};
+	struct device_node *np;
 	int ret, valid_cnt = 0;
 	u32 buf_len = 0;
 	u8 *pos;
@@ -1396,8 +1433,11 @@ int __mt7921_mcu_set_clc(struct mt792x_dev *dev, u8 *alpha2,
 
 	if (dev->phy.chip_cap & MT792x_CHIP_CAP_CLC_EVT_EN)
 		req.cap |= CLC_CAP_EVT_EN;
-	if (mt76_find_power_limits_node(&dev->mt76))
+
+	np = mt76_find_power_limits_node(&dev->mt76);
+	if (np)
 		req.cap |= CLC_CAP_DTS_EN;
+	of_node_put(np);
 
 	buf_len = le32_to_cpu(clc->len) - sizeof(*clc);
 	pos = clc->data;
@@ -1511,6 +1551,19 @@ int mt7921_mcu_wf_rf_pin_ctrl(struct mt792x_phy *phy, u8 action)
 
 	return mt76_mcu_send_msg(&dev->mt76, MCU_EXT_CMD(WF_RF_PIN_CTRL), &req,
 				 sizeof(req), action ? true : false);
+}
+
+#define MT7921_THERMAL_PROT_LOW_TEMP	105
+#define MT7921_THERMAL_PROT_HIGH_TEMP	115
+
+int mt7921_mcu_set_thermal_protect(struct mt792x_dev *dev)
+{
+	char cmd[64];
+
+	snprintf(cmd, sizeof(cmd), "DowngradeTxStreamTemp %d %d",
+		 MT7921_THERMAL_PROT_LOW_TEMP, MT7921_THERMAL_PROT_HIGH_TEMP);
+
+	return mt76_connac_mcu_chip_config(&dev->mt76, cmd);
 }
 
 int mt7921_mcu_set_rxfilter(struct mt792x_dev *dev, u32 fif,

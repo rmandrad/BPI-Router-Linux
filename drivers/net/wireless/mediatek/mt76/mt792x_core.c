@@ -4,6 +4,7 @@
 #include <linux/module.h>
 #include <linux/firmware.h>
 #include <linux/slab.h>
+#include <linux/etherdevice.h>
 
 #include "mt792x.h"
 #include "dma.h"
@@ -117,7 +118,7 @@ static const struct ieee80211_iface_combination if_comb_chanctx_nan[] = {
 		.limits = if_limits_nan_mcc,
 		.n_limits = ARRAY_SIZE(if_limits_nan_mcc),
 		.max_interfaces = MT792x_MAX_INTERFACES,
-		.num_different_channels = 2,
+		.num_different_channels = 3,
 		.beacon_int_infra_match = false,
 	},
 	{
@@ -177,6 +178,17 @@ void mt792x_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 	u8 link_id;
 	int qid;
 
+	if (!(info->flags & IEEE80211_TX_CTL_HW_80211_ENCAP) && skb->len >= 2) {
+		struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)skb->data;
+
+		if (vif && ieee80211_vif_type_p2p(vif) == NL80211_IFTYPE_P2P_GO &&
+		    ieee80211_is_probe_resp(mgmt->frame_control) &&
+		    mt792x_vif_is_absent(vif)) {
+			ieee80211_free_txskb(hw, skb);
+			return;
+		}
+	}
+
 	if (control->sta) {
 		struct mt792x_link_sta *mlink;
 		struct mt792x_sta *sta;
@@ -188,10 +200,20 @@ void mt792x_tx(struct ieee80211_hw *hw, struct ieee80211_tx_control *control,
 	}
 
 	if (vif && !control->sta) {
+		struct ieee80211_hdr *hdr = (struct ieee80211_hdr *)skb->data;
+		struct mt792x_bss_conf *mconf;
+		const u8 *da = hdr->addr1;
 		struct mt792x_vif *mvif;
 
 		mvif = (struct mt792x_vif *)vif->drv_priv;
+		mconf = &mvif->bss_conf;
 		wcid = &mvif->sta.deflink.wcid;
+
+		if (info->flags & IEEE80211_TX_CTL_HW_80211_ENCAP)
+			da = skb->data;
+
+		if (mconf->bmc_valid && is_multicast_ether_addr(da))
+			wcid = &mconf->bmc.wcid;
 	}
 
 	if (vif && control->sta && ieee80211_vif_is_mld(vif) &&
@@ -413,9 +435,25 @@ void mt792x_flush(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 		  u32 queues, bool drop)
 {
 	struct mt792x_dev *dev = mt792x_hw_dev(hw);
+	bool park;
+
+	mt792x_mutex_acquire(dev);
+
+	park = !test_bit(MT76_RESET, &dev->mphy.state);
+	if (park) {
+		mt76_worker_disable(&dev->mt76.tx_worker);
+		if (drop)
+			mt76_txq_purge_pending(&dev->mphy);
+		mt76_txq_schedule_pending(&dev->mphy);
+	}
 
 	wait_event_timeout(dev->mt76.tx_wait,
 			   !mt76_has_tx_pending(&dev->mphy), HZ / 2);
+
+	if (park)
+		mt76_worker_enable(&dev->mt76.tx_worker);
+
+	mt792x_mutex_release(dev);
 }
 EXPORT_SYMBOL_GPL(mt792x_flush);
 
@@ -465,13 +503,11 @@ int mt792x_assign_vif_chanctx(struct ieee80211_hw *hw,
 			      struct ieee80211_bss_conf *link_conf,
 			      struct ieee80211_chanctx_conf *ctx)
 {
-	struct mt792x_chanctx *mctx = (struct mt792x_chanctx *)ctx->drv_priv;
 	struct mt792x_vif *mvif = (struct mt792x_vif *)vif->drv_priv;
 	struct mt792x_dev *dev = mt792x_hw_dev(hw);
 
 	mutex_lock(&dev->mt76.mutex);
 	mvif->bss_conf.mt76.ctx = ctx;
-	mctx->bss_conf = &mvif->bss_conf;
 	mt76_phy_chandef_set(&dev->mphy, &ctx->def);
 	mutex_unlock(&dev->mt76.mutex);
 
@@ -484,12 +520,10 @@ void mt792x_unassign_vif_chanctx(struct ieee80211_hw *hw,
 				 struct ieee80211_bss_conf *link_conf,
 				 struct ieee80211_chanctx_conf *ctx)
 {
-	struct mt792x_chanctx *mctx = (struct mt792x_chanctx *)ctx->drv_priv;
 	struct mt792x_vif *mvif = (struct mt792x_vif *)vif->drv_priv;
 	struct mt792x_dev *dev = mt792x_hw_dev(hw);
 
 	mutex_lock(&dev->mt76.mutex);
-	mctx->bss_conf = NULL;
 	mvif->bss_conf.mt76.ctx = NULL;
 	mutex_unlock(&dev->mt76.mutex);
 
@@ -772,7 +806,6 @@ int mt792x_init_wiphy(struct ieee80211_hw *hw)
 
 	hw->sta_data_size = sizeof(struct mt792x_sta);
 	hw->vif_data_size = sizeof(struct mt792x_vif);
-	hw->chanctx_data_size = sizeof(struct mt792x_chanctx);
 
 	if (dev->fw_features & MT792x_FW_CAP_CNM)
 		wiphy->flags |= WIPHY_FLAG_HAS_REMAIN_ON_CHANNEL;
@@ -806,6 +839,13 @@ int mt792x_init_wiphy(struct ieee80211_hw *hw)
 		wiphy->nan_capa.max_channel_switch_time = 12;
 		wiphy->nan_capa.dev_capabilities = NAN_DEV_CAPA_EXT_KEY_ID_SUPPORTED;
 		wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_SECURE_NAN);
+		wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_BEACON_PROTECTION);
+		wiphy_ext_feature_set(wiphy, NL80211_EXT_FEATURE_BEACON_PROTECTION_CLIENT);
+		/* Per-peer group key WTBL needed for NAN RX IGTK/BIGTK delivery:
+		 * ieee80211_key_enable_hw_accel() drops per-STA group keys unless
+		 * this flag is set or the vif is NAN_DATA.
+		 */
+		ieee80211_hw_set(hw, SUPPORTS_PER_STA_GTK);
 	}
 
 	wiphy->max_scan_ie_len = MT76_CONNAC_SCAN_IE_LEN;

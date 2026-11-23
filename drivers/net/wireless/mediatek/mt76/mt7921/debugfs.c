@@ -189,8 +189,8 @@ mt7921_deep_sleep_set(void *data, u64 val)
 {
 	struct mt792x_dev *dev = data;
 	struct mt76_connac_pm *pm = &dev->pm;
-	bool monitor = !!(dev->mphy.hw->conf.flags & IEEE80211_CONF_MONITOR);
 	bool enable = !!val;
+	bool monitor;
 
 	if (mt76_is_usb(&dev->mt76))
 		return -EOPNOTSUPP;
@@ -199,6 +199,7 @@ mt7921_deep_sleep_set(void *data, u64 val)
 	if (pm->ds_enable_user == enable)
 		goto out;
 
+	monitor = !!(dev->mphy.hw->conf.flags & IEEE80211_CONF_MONITOR);
 	pm->ds_enable_user = enable;
 	pm->ds_enable = enable && !monitor;
 	mt76_connac_mcu_set_deep_sleep(&dev->mt76, pm->ds_enable);
@@ -237,7 +238,7 @@ static int mt7921_chip_reset(void *data, u64 val)
 	default:
 		/* Collect the core dump before reset wifisys. */
 		mt792x_mutex_acquire(dev);
-		ret = mt76_connac_mcu_chip_config(&dev->mt76);
+		ret = mt76_connac_mcu_chip_config(&dev->mt76, "assert");
 		mt792x_mutex_release(dev);
 		break;
 	}

@@ -18,6 +18,11 @@
 #define MT792x_WTBL_SIZE	20
 #define MT792x_WTBL_RESERVED	(MT792x_WTBL_SIZE - 1)
 #define MT792x_WTBL_STA		(MT792x_WTBL_RESERVED - MT792x_MAX_INTERFACES)
+/* Sentinel for a lazily-allocated wcid that has not yet been assigned a slot.
+ * U16_MAX is outside every valid alloc range and matches the 0xffff value
+ * used in mt76 DMA ring entries to mark an unused wcid field.
+ */
+#define MT792x_WCID_IDX_UNSET	U16_MAX
 
 #define MT792x_CFEND_RATE_DEFAULT	0x49	/* OFDM 24M */
 #define MT792x_CFEND_RATE_11B		0x03	/* 11B LP, 11M */
@@ -33,6 +38,7 @@
 #define MT792x_CHIP_CAP_REGD_EN BIT(5)
 #define MT792x_CHIP_CAP_MLO_EN BIT(8)
 #define MT792x_CHIP_CAP_MLO_EML_EN BIT(9)
+#define MT792x_CHIP_CAP_AXIDMA_EN BIT(16)
 
 /* NOTE: used to map mt76_rates. idx may change if firmware expands table */
 #define MT792x_BASIC_RATES_TBL	14
@@ -128,6 +134,7 @@ struct mt792x_sta_nan_sched {
 	u16 committed_dw;
 	u32 sch_idx;
 	bool idx_assigned;
+	bool has_commit;	/* last CRB carried a non-empty committed map */
 	unsigned long ndp_ctx_bitmap;
 	bool ndp_ctx_assigned;
 	u8 ndp_ctx_id;		/* assigned NDP context ID (for NDI sta) */
@@ -148,13 +155,13 @@ struct mt792x_sta {
 
 	/* NAN peer schedule */
 	struct mt792x_sta_nan_sched nan_sched;
+
+	/* NAN per-peer group key WTBLs (allocated lazily when keys are installed) */
+	struct mt76_wcid nan_rx_gtk_wcid;    /* NAN_DATA peer: RX GTK WTBL (per-peer) */
+	struct mt76_wcid nan_rx_igtk_wcid;   /* NAN peer: RX IGTK/BIGTK WTBL (per-peer) */
 };
 
 DECLARE_EWMA(rssi, 10, 8);
-
-struct mt792x_chanctx {
-	struct mt792x_bss_conf *bss_conf;
-};
 
 struct mt792x_bss_conf {
 	struct mt76_vif_link mt76; /* must be first */
@@ -162,6 +169,12 @@ struct mt792x_bss_conf {
 	struct ewma_rssi rssi;
 	struct ieee80211_tx_queue_params queue_params[IEEE80211_NUM_ACS];
 	unsigned int link_id;
+
+	bool absent;
+
+	/* For group-addressed frames that are sent outside a TXQ */
+	struct mt792x_link_sta bmc;
+	bool bmc_valid;
 };
 
 struct mt792x_nan_conf {
@@ -172,6 +185,44 @@ struct mt792x_nan_conf {
 	bool enable_dw_notification;
 };
 
+/*
+ * NAN WTBL layout (mt7925)
+ *
+ * TX scope -- determined by who shares the encrypting key:
+ *
+ *   mvif->sta.deflink.wcid          [NAN vif, interface-level]
+ *     TX IGTK/BIGTK: multicast management TX.  Shared by all NMI peers;
+ *     installed via the normal hardware key path (set_key fallback).
+ *
+ *   mvif->sta.deflink.wcid          [NAN_DATA vif, interface-level]
+ *     TX GTK: multicast data TX.
+ *     NOTE: all peers in the same NAN Data Cluster share one TX GTK, and
+ *     different NDCs use independent keys, so this really wants one WTBL
+ *     per NDC.  set_key returns -EOPNOTSUPP instead: mac80211 does not
+ *     pass an NDC ID, so the right key cannot be picked.
+ *
+ * RX scope -- always per-peer because each sender has its own key:
+ *
+ *   msta->deflink.wcid              [NMI or NDI peer, peer-level]
+ *     NM-TK (NMI unicast) or ND-TK (NDI unicast).
+ *
+ *   msta->nan_rx_gtk_wcid           [NDI peer under NAN_DATA vif, peer-level]
+ *     RX GTK: multicast data RX.  Keyidx 1-2; allocated lazily in set_key.
+ *
+ *   msta->nan_rx_igtk_wcid          [NMI peer under NAN vif, peer-level]
+ *     RX IGTK/BIGTK: multicast management RX.  Keyidx 4-7; allocated
+ *     lazily in set_key.
+ *
+ * Example -- 2 peers, full security:
+ *   1  NAN vif WTBL                 TX IGTK/BIGTK
+ *   1  NAN_DATA vif WTBL            TX GTK
+ *   2  NMI peer WTBLs               NM-TK (one per peer)
+ *   2  NDI peer WTBLs               ND-TK (one per peer)
+ *   2  RX GTK WTBLs                 nan_rx_gtk_wcid, one per NDI peer
+ *   2  RX IGTK/BIGTK WTBLs          nan_rx_igtk_wcid, one per NMI peer
+ *  = 10 WTBLs total
+ */
+
 struct mt792x_nan {
 	struct mt792x_nan_conf conf;
 
@@ -181,6 +232,13 @@ struct mt792x_nan {
 
 	/* Connection index bitmap, up to NAN_MAX_CONN_CFG peers */
 	unsigned long conn_bitmap;
+
+	/*
+	 * Set when firmware reports an active peer schedule via
+	 * NAN_UNI_EVENT_LOWPOWER_CTRL; cleared once the re-enable command
+	 * has been sent on resume.
+	 */
+	bool lowpower_mode;
 };
 
 struct mt792x_vif {
@@ -191,6 +249,7 @@ struct mt792x_vif {
 	struct mt792x_sta *wep_sta;
 
 	struct mt792x_phy *phy;
+	bool roc_join_held; /* join ROC kept until the STA is authorized */
 	u16 valid_links;
 	u8 deflink_id;
 	enum mt792x_mlo_pm_state mlo_pm_state;
@@ -199,6 +258,13 @@ struct mt792x_vif {
 	struct timer_list csa_timer;
 
 	struct mt792x_nan nan;
+
+	/* NAN DW-WTBL: driver-created STA the firmware gates to the DW;
+	 * host mgmt TX (SDF / pre-NDP NAF) is steered onto it so the BMC
+	 * WTBL carries multicast data only and is never paused for it.
+	 * idx == 0 or >= MT792x_WTBL_STA means not set up.
+	 */
+	struct mt76_wcid nan_dw_wcid;
 };
 
 struct mt792x_phy {
@@ -214,6 +280,7 @@ struct mt792x_phy {
 	s16 coverage_class;
 	u8 slottime;
 
+	u32 rxfilter;
 	u32 rx_ampdu_ts;
 	u32 ampdu_ref;
 
@@ -237,6 +304,7 @@ struct mt792x_phy {
 	wait_queue_head_t roc_wait;
 	u8 roc_token_id;
 	bool roc_grant;
+	bool roc_notify; /* mac80211 expects the expiry of this ROC */
 };
 
 struct mt792x_irq_map {
@@ -302,6 +370,7 @@ struct mt792x_dev {
 	struct mt792x_phy phy;
 
 	struct work_struct reset_work;
+	struct wiphy_work reset_vif_work;
 	bool hw_full_reset:1;
 	bool hw_init_done:1;
 	bool fw_assert:1;
@@ -321,9 +390,14 @@ struct mt792x_dev {
 
 	u8 fw_debug;
 	u8 fw_features;
+	/* LED state last written to the GPIO, -1 if unknown */
+	s8 led_state;
 
 	struct mt76_connac_pm pm;
 	struct mt76_connac_coredump coredump;
+	/* MT7921 unsolicited event dispatch versus unregister. */
+	spinlock_t mcu_event_lock;
+	bool mcu_events_stopped;
 	const struct mt792x_hif_ops *hif_ops;
 	const struct mt792x_irq_map *irq_map;
 	const struct mt792x_pcie_reg *pcie_reg;
@@ -342,6 +416,22 @@ struct mt792x_dev {
 	struct ieee80211_vif *nan_vif;
 	const struct ieee80211_iface_combination *iface_combinations;
 	int n_iface_combinations;
+	/* deferred NAN MCU events run out of the atomic RX path on one shared
+	 * work; see mt7925_nan_deferred_work() and enum mt7925_nan_deferred_event
+	 */
+	struct work_struct nan_deferred_work;
+	/* protects @nan_deferred_pending */
+	spinlock_t nan_deferred_lock;
+	unsigned long nan_deferred_pending;
+	u8 nan_started_cluster_id[ETH_ALEN];
+	u8 nan_joined_cluster_id[ETH_ALEN];
+
+	struct {
+		void *va;
+		dma_addr_t dma_addr;
+		u32 size;
+		bool reused;
+	} cached_cal;
 };
 
 static inline struct mt792x_bss_conf *
@@ -386,6 +476,16 @@ mt792x_link_conf_to_mconf(struct ieee80211_bss_conf *link_conf)
 	return mt792x_vif_to_link(mvif, link_conf->link_id);
 }
 
+static inline bool mt792x_vif_is_absent(struct ieee80211_vif *vif)
+{
+	struct mt792x_vif *mvif = (struct mt792x_vif *)vif->drv_priv;
+
+	if (ieee80211_vif_is_mld(vif))
+		return false;
+
+	return mvif->bss_conf.absent;
+}
+
 static inline struct ieee80211_bss_conf *
 mt792x_vif_to_bss_conf(struct ieee80211_vif *vif, unsigned int link_id)
 {
@@ -421,6 +521,15 @@ mt792x_hw_phy(struct ieee80211_hw *hw)
 	struct mt76_phy *phy = hw->priv;
 
 	return phy->priv;
+}
+
+static inline void mt792x_reset_vif_work_cancel(struct mt792x_dev *dev)
+{
+	struct wiphy *wiphy = mt76_hw(dev)->wiphy;
+
+	wiphy_lock(wiphy);
+	wiphy_work_cancel(wiphy, &dev->reset_vif_work);
+	wiphy_unlock(wiphy);
 }
 
 static inline void

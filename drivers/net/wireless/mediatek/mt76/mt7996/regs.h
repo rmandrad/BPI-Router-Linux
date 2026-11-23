@@ -426,6 +426,7 @@ enum offs_rev {
 #define MT_WF_RFCR1_DROP_BA			BIT(6)
 #define MT_WF_RFCR1_DROP_CFEND			BIT(7)
 #define MT_WF_RFCR1_DROP_CFACK			BIT(8)
+#define MT_WF_RFCR1_DROP_NO2ME_TF		BIT(22)
 
 #define MT_WF_RMAC_MIB_AIRTIME0(_band)		MT_WF_RMAC(_band, 0x0380)
 #define MT_WF_RMAC_MIB_RXTIME_CLR		BIT(31)
@@ -781,6 +782,11 @@ enum offs_rev {
 #define MT_WF_SUBSYS_RST_BYPASS_WFDMA_SLP_PROT	BIT(6)
 #define MT_WF_SUBSYS_RST_BYPASS_WFDMA2_SLP_PROT	BIT(16)
 #define MT_WF_SUBSYS_RST_WHOLE_PATH_RST_REVERT_CYCLE	GENMASK(15, 8)
+
+/* WED registers, offsets for mtk_wed_device_reg_read() */
+#define MT_WED_CTRL				0x00c
+#define MT_WED_CTRL_WPDMA_INT_AGENT_EN		BIT(0)
+#define MT_WED_CTRL_WPDMA_INT_AGENT_BUSY	BIT(1)
 
 /* PCIE MAC */
 #define MT_PCIE_MAC_BASE			0x74030000

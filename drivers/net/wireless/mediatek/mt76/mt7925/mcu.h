@@ -466,6 +466,17 @@ struct sta_rec_hdr_trans {
 	u8 rsv;
 } __packed;
 
+struct sta_rec_state_v2 {
+	__le16 tag;
+	__le16 len;
+	u8 state;
+	u8 rsv[3];
+	__le32 flags;
+	u8 vht_opmode;
+	u8 action;
+	u8 rsv2[2];
+} __packed;
+
 struct sta_rec_mld {
 	__le16 tag;
 	__le16 len;
@@ -730,8 +741,6 @@ int mt7925_mcu_sched_scan_req(struct mt76_phy *phy,
 int mt7925_mcu_sched_scan_enable(struct mt76_phy *phy,
 				 struct ieee80211_vif *vif,
 				 bool enable);
-void mt7925_mcu_del_dev(struct mt76_dev *mdev,
-			struct ieee80211_vif *vif);
 int mt7925_mcu_add_bss_info(struct mt792x_phy *phy,
 			    struct ieee80211_chanctx_conf *ctx,
 			    struct ieee80211_bss_conf *link_conf,

@@ -187,6 +187,56 @@ static int mt7925_init_nan_cap(struct mt76_dev *mdev)
 	return 0;
 }
 
+static int mt7925_led_set_brightness(struct led_classdev *led_cdev,
+				     enum led_brightness brightness)
+{
+	struct mt76_phy *mphy = container_of(led_cdev, struct mt76_phy,
+					     leds.cdev);
+	struct mt792x_dev *dev = container_of(mphy->dev, struct mt792x_dev,
+					      mt76);
+	bool on = brightness != LED_OFF;
+	u8 pin = mphy->leds.pin;
+	u32 mask = BIT(pin % 32);
+
+	mt792x_mutex_acquire(dev);
+	if (dev->pm.suspended || dev->led_state == on)
+		goto out;
+
+	if (on ^ mphy->leds.al)
+		mt76_wr(dev, MT_CBTOP_GPIO_DOUT_SET(pin), mask);
+	else
+		mt76_wr(dev, MT_CBTOP_GPIO_DOUT_CLR(pin), mask);
+
+	/* the pin starts in another function, make it a GPIO output */
+	if (dev->led_state < 0) {
+		mt76_wr(dev, MT_CBTOP_GPIO_DIR_SET(pin), mask);
+		mt76_wr(dev, MT_CBTOP_GPIO_MODE_MOD(pin),
+			MT_CBTOP_GPIO_MODE_MOD_EN << ((pin % 8) * 4));
+	}
+
+	dev->led_state = on;
+out:
+	mt792x_mutex_release(dev);
+
+	return 0;
+}
+
+static void mt7925_init_led(struct mt792x_dev *dev)
+{
+	struct mt76_phy *mphy = &dev->mphy;
+
+	if (!IS_ENABLED(CONFIG_MT76_LEDS) || !mt76_is_usb(&dev->mt76) ||
+	    !is_mt7925(&dev->mt76))
+		return;
+
+	/* MediaTek's Windows driver uses GPIO 8 on MT7925 USB adapters */
+	mphy->leds.pin = 8;
+	/* the LED of the NETGEAR A9000 is active low */
+	mphy->leds.al = true;
+	mphy->leds.cdev.flags |= LED_HW_PLUGGABLE;
+	mphy->leds.cdev.brightness_set_blocking = mt7925_led_set_brightness;
+}
+
 static void mt7925_init_work(struct work_struct *work)
 {
 	struct mt792x_dev *dev = container_of(work, struct mt792x_dev,
@@ -208,6 +258,7 @@ static void mt7925_init_work(struct work_struct *work)
 	}
 
 	dev->mt76.init_wiphy = mt7925_init_nan_cap;
+	mt7925_init_led(dev);
 
 	ret = mt76_register_device(&dev->mt76, true, mt76_rates,
 				   ARRAY_SIZE(mt76_rates));
@@ -269,7 +320,10 @@ int mt7925_register_device(struct mt792x_dev *dev)
 	skb_queue_head_init(&dev->coredump.msg_list);
 
 	INIT_WORK(&dev->reset_work, mt7925_mac_reset_work);
+	wiphy_work_init(&dev->reset_vif_work, mt7925_mac_reset_vif_work);
 	INIT_WORK(&dev->init_work, mt7925_init_work);
+	INIT_WORK(&dev->nan_deferred_work, mt7925_nan_deferred_work);
+	spin_lock_init(&dev->nan_deferred_lock);
 
 	INIT_WORK(&dev->phy.roc_work, mt7925_roc_work);
 	timer_setup(&dev->phy.roc_timer, mt792x_roc_timer, 0);
@@ -298,6 +352,8 @@ int mt7925_register_device(struct mt792x_dev *dev)
 	ret = mt792x_init_wiphy(hw);
 	if (ret)
 		return ret;
+
+	hw->wiphy->max_sched_scan_ie_len = MT76_CONNAC_SCAN_IE_LEN;
 
 	hw->wiphy->reg_notifier = mt7925_regd_notifier;
 	dev->mphy.sband_2g.sband.ht_cap.cap |=

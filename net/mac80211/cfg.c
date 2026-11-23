@@ -2591,8 +2591,14 @@ static int sta_apply_parameters(struct ieee80211_local *local,
 	if (ieee80211_vif_is_mesh(&sdata->vif))
 		sta_apply_mesh_params(local, sta, params);
 
-	if (params->airtime_weight)
+	if (params->airtime_weight &&
+	    params->airtime_weight != sta->airtime_weight) {
 		sta->airtime_weight = params->airtime_weight;
+		/* ieee80211_add_station() reports it after the insert */
+		if (sta->uploaded)
+			drv_sta_set_airtime_weight(local, sdata, &sta->sta,
+						   sta->airtime_weight);
+	}
 
 	if (params->nmi_mac) {
 		struct ieee80211_sub_if_data *nmi =
@@ -2708,6 +2714,12 @@ static int ieee80211_add_station(struct wiphy *wiphy, struct wireless_dev *wdev,
 		rate_control_rate_init_all_links(sta);
 
 	err = sta_info_insert(sta);
+
+	/* on success the wiphy lock keeps the station valid here */
+	if (!err && sta->uploaded &&
+	    sta->airtime_weight != IEEE80211_DEFAULT_AIRTIME_WEIGHT)
+		drv_sta_set_airtime_weight(local, sdata, &sta->sta,
+					   sta->airtime_weight);
 
 	/*
 	 * ieee80211_nan_update_ndi_carrier was called from sta_apply_parameters,

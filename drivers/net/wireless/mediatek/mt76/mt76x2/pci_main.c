@@ -49,6 +49,8 @@ int mt76x2e_set_channel(struct mt76_phy *phy)
 
 	tasklet_enable(&dev->dfs_pd.dfs_tasklet);
 	tasklet_enable(&dev->mt76.pre_tbtt_tasklet);
+	ieee80211_queue_delayed_work(mt76_hw(dev), &dev->mphy.mac_work,
+				     MT_MAC_WORK_INTERVAL);
 
 	return 0;
 }
@@ -153,5 +155,6 @@ const struct ieee80211_ops mt76x2_ops = {
 	.set_rts_threshold = mt76x02_set_rts_threshold,
 	.reconfig_complete = mt76x02_reconfig_complete,
 	.set_sar_specs = mt76x2_set_sar_specs,
+	.can_aggregate_in_amsdu = mt76x02_can_aggregate_in_amsdu,
 };
 

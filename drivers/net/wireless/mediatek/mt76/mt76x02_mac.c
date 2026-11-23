@@ -166,7 +166,8 @@ void mt76x02_mac_wcid_setup(struct mt76x02_dev *dev, u8 idx,
 }
 EXPORT_SYMBOL_GPL(mt76x02_mac_wcid_setup);
 
-void mt76x02_mac_wcid_set_drop(struct mt76x02_dev *dev, u8 idx, bool drop)
+static void
+__mt76x02_mac_wcid_set_drop(struct mt76x02_dev *dev, u8 idx, bool drop)
 {
 	u32 val = mt76_rr(dev, MT_WCID_DROP(idx));
 	u32 bit = MT_WCID_DROP_MASK(idx);
@@ -174,6 +175,19 @@ void mt76x02_mac_wcid_set_drop(struct mt76x02_dev *dev, u8 idx, bool drop)
 	/* prevent unnecessary writes */
 	if ((val & bit) != (bit * drop))
 		mt76_wr(dev, MT_WCID_DROP(idx), (val & ~bit) | (bit * drop));
+}
+
+void mt76x02_mac_wcid_set_drop(struct mt76x02_dev *dev, u8 idx, bool drop)
+{
+	/* USB register access can sleep, and mt76.mutex serialises USB callers */
+	if (!mt76_is_mmio(&dev->mt76)) {
+		__mt76x02_mac_wcid_set_drop(dev, idx, drop);
+		return;
+	}
+
+	spin_lock_bh(&dev->mt76.lock);
+	__mt76x02_mac_wcid_set_drop(dev, idx, drop);
+	spin_unlock_bh(&dev->mt76.lock);
 }
 
 static u16
@@ -816,9 +830,13 @@ int mt76x02_mac_process_rx(struct mt76x02_dev *dev, struct sk_buff *skb,
 	len = FIELD_GET(MT_RXWI_CTL_MPDU_LEN, ctl);
 	pn_len = FIELD_GET(MT_RXINFO_PN_LEN, rxinfo);
 	if (pn_len) {
-		int offset = ieee80211_get_hdrlen_from_skb(skb) + pad_len;
-		u8 *data = skb->data + offset;
+		unsigned int offset = ieee80211_get_hdrlen_from_skb(skb) + pad_len;
+		u8 *data;
 
+		if (offset + 8 > skb->len)
+			return -EINVAL;
+
+		data = skb->data + offset;
 		status->iv[0] = data[7];
 		status->iv[1] = data[6];
 		status->iv[2] = data[5];
@@ -837,6 +855,9 @@ int mt76x02_mac_process_rx(struct mt76x02_dev *dev, struct sk_buff *skb,
 			len -= pn_len << 2;
 		}
 	}
+
+	if (pad_len + ieee80211_get_hdrlen_from_skb(skb) > skb->len)
+		return -EINVAL;
 
 	mt76x02_remove_hdr_pad(skb, pad_len);
 

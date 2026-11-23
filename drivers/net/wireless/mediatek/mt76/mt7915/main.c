@@ -87,8 +87,10 @@ int mt7915_run(struct ieee80211_hw *hw)
 		ieee80211_queue_delayed_work(hw, &phy->mt76->mac_work,
 					     MT7915_WATCHDOG_TIME);
 
-	if (!running)
+	if (!running || !phy->counter_reset) {
 		mt7915_mac_reset_counters(phy);
+		phy->counter_reset = true;
+	}
 
 out:
 	return ret;
@@ -273,11 +275,14 @@ static int mt7915_add_interface(struct ieee80211_hw *hw,
 	mt7915_init_bitrate_mask(vif);
 	memset(&mvif->cap, -1, sizeof(mvif->cap));
 
+	rcu_assign_pointer(dev->mt76.wcid[idx], &mvif->sta.wcid);
 	mt7915_mcu_add_bss_info(phy, vif, true);
 	mt7915_mcu_add_sta(dev, vif, NULL, CONN_STATE_PORT_SECURE, true);
-	rcu_assign_pointer(dev->mt76.wcid[idx], &mvif->sta.wcid);
 
 	mutex_unlock(&dev->mt76.mutex);
+
+	if (!is_mt7915(&dev->mt76))
+		mt7915_mcu_set_vow_band(dev, mvif);
 
 	return 0;
 
@@ -738,15 +743,10 @@ mt7915_stop_ap(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 }
 
 static void
-mt7915_channel_switch_beacon(struct ieee80211_hw *hw,
-			     struct ieee80211_vif *vif,
-			     struct cfg80211_chan_def *chandef)
+mt7915_sta_vow_set_airtime_weight(struct mt7915_dev *dev,
+				  struct mt7915_sta *msta, u16 weight)
 {
-	struct mt7915_dev *dev = mt7915_hw_dev(hw);
-
-	mutex_lock(&dev->mt76.mutex);
-	mt7915_mcu_add_beacon(hw, vif, true, BSS_CHANGED_BEACON);
-	mutex_unlock(&dev->mt76.mutex);
+	mt7915_mcu_set_vow_drr_ctrl(dev, msta, VOW_DRR_CTRL_STA_ALL, weight);
 }
 
 int mt7915_mac_sta_add(struct mt76_dev *mdev, struct ieee80211_vif *vif,
@@ -778,6 +778,16 @@ int mt7915_mac_sta_add(struct mt76_dev *mdev, struct ieee80211_vif *vif,
 	mt7915_mac_wtbl_update(dev, idx,
 			       MT_WTBL_UPDATE_ADM_COUNT_CLEAR);
 	mt7915_mcu_add_sta(dev, vif, sta, CONN_STATE_DISCONNECT, true);
+
+	if (!is_mt7915(&dev->mt76)) {
+		mt7915_mcu_set_vow_drr_ctrl(dev, msta, VOW_DRR_CTRL_STA_PAUSE, 0);
+		/* drv_priv is zeroed only when the station is allocated, so
+		 * a weight survives a hardware restart
+		 */
+		mt7915_sta_vow_set_airtime_weight(dev, msta,
+						  msta->airtime_weight ?:
+						  IEEE80211_DEFAULT_AIRTIME_WEIGHT);
+	}
 
 	return 0;
 }
@@ -859,6 +869,11 @@ int mt7915_mac_sta_event(struct mt76_dev *mdev, struct ieee80211_vif *vif,
 		msta->wcid.sta = 1;
 		msta->wcid.sta_disabled = 0;
 
+		/* a weight set before association was only stored */
+		if (!is_mt7915(&dev->mt76) && msta->airtime_weight)
+			mt7915_sta_vow_set_airtime_weight(dev, msta,
+							  msta->airtime_weight);
+
 		return 0;
 
 	case MT76_STA_EVENT_AUTHORIZE:
@@ -886,9 +901,19 @@ void mt7915_mac_sta_remove(struct mt76_dev *mdev, struct ieee80211_vif *vif,
 {
 	struct mt7915_dev *dev = container_of(mdev, struct mt7915_dev, mt76);
 	struct mt7915_sta *msta = (struct mt7915_sta *)sta->drv_priv;
+	int i;
 
 	mt7915_mac_wtbl_update(dev, msta->wcid.idx,
 			       MT_WTBL_UPDATE_ADM_COUNT_CLEAR);
+
+	/* the firmware can still hold an agreement whose delete failed, so
+	 * its table entry stays counted
+	 */
+	for (i = 0; i < ARRAY_SIZE(msta->twt.flow); i++) {
+		if (msta->twt.flowid_mask & BIT(i))
+			list_del_init(&msta->twt.flow[i].list);
+	}
+	msta->twt.flowid_mask = 0;
 
 	spin_lock_bh(&mdev->sta_poll_lock);
 	if (!list_empty(&msta->wcid.poll_list))
@@ -1322,6 +1347,23 @@ static void mt7915_sta_set_decap_offload(struct ieee80211_hw *hw,
 		return;
 
 	mt76_connac_mcu_wtbl_update_hdr_trans(&dev->mt76, vif, sta);
+}
+
+static void mt7915_sta_set_airtime_weight(struct ieee80211_hw *hw,
+					  struct ieee80211_vif *vif,
+					  struct ieee80211_sta *sta, u16 weight)
+{
+	struct mt7915_dev *dev = mt7915_hw_dev(hw);
+	struct mt7915_sta *msta = (struct mt7915_sta *)sta->drv_priv;
+
+	if (is_mt7915(&dev->mt76))
+		return;
+
+	msta->airtime_weight = weight;
+	if (!msta->wcid.sta)
+		return;
+
+	mt7915_sta_vow_set_airtime_weight(dev, msta, weight);
 }
 
 static int mt7915_sta_set_txpwr(struct ieee80211_hw *hw,
@@ -1803,7 +1845,6 @@ const struct ieee80211_ops mt7915_ops = {
 	.release_buffered_frames = mt76_release_buffered_frames,
 	.get_txpower = mt76_get_txpower,
 	.set_sar_specs = mt7915_set_sar_specs,
-	.channel_switch_beacon = mt7915_channel_switch_beacon,
 	.get_stats = mt7915_get_stats,
 	.get_et_sset_count = mt7915_get_et_sset_count,
 	.get_et_stats = mt7915_get_et_stats,
@@ -1820,6 +1861,7 @@ const struct ieee80211_ops mt7915_ops = {
 	.sta_set_txpwr = mt7915_sta_set_txpwr,
 	.sta_set_4addr = mt7915_sta_set_4addr,
 	.sta_set_decap_offload = mt7915_sta_set_decap_offload,
+	.sta_set_airtime_weight = mt7915_sta_set_airtime_weight,
 	.add_twt_setup = mt7915_mac_add_twt_setup,
 	.twt_teardown_request = mt7915_twt_teardown_request,
 	.set_frag_threshold = mt7915_set_frag_threshold,

@@ -825,7 +825,9 @@ int mt7615_mac_write_txwi(struct mt7615_dev *dev, __le32 *txwi,
 	if (!ieee80211_is_beacon(fc)) {
 		struct ieee80211_hw *hw = mt76_hw(dev);
 
-		val = MT_TXD5_TX_STATUS_HOST | FIELD_PREP(MT_TXD5_PID, pid);
+		val = FIELD_PREP(MT_TXD5_PID, pid);
+		if (!multicast)
+			val |= MT_TXD5_TX_STATUS_HOST;
 		if (!ieee80211_hw_check(hw, SUPPORTS_PS))
 			val |= MT_TXD5_SW_POWER_MGMT;
 		txwi[5] = cpu_to_le32(val);
@@ -903,13 +905,16 @@ void mt7615_mac_sta_poll(struct mt7615_dev *dev)
 	list_splice_init(&dev->mt76.sta_poll_list, &sta_poll_list);
 	spin_unlock_bh(&dev->mt76.sta_poll_lock);
 
-	while (!list_empty(&sta_poll_list)) {
+	while (true) {
 		bool clear = false;
 
+		spin_lock_bh(&dev->mt76.sta_poll_lock);
+		if (list_empty(&sta_poll_list)) {
+			spin_unlock_bh(&dev->mt76.sta_poll_lock);
+			break;
+		}
 		msta = list_first_entry(&sta_poll_list, struct mt7615_sta,
 					wcid.poll_list);
-
-		spin_lock_bh(&dev->mt76.sta_poll_lock);
 		list_del_init(&msta->wcid.poll_list);
 		spin_unlock_bh(&dev->mt76.sta_poll_lock);
 

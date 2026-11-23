@@ -197,6 +197,29 @@ static const struct file_operations mt7915_sys_recovery_ops = {
 	.llseek = default_llseek,
 };
 
+static int mt7915_vow_atf_set(void *data, u64 val)
+{
+	struct mt7915_dev *dev = data;
+
+	dev->vow_atf_en = !!val;
+	mt7915_mcu_set_vow_feature_ctrl(dev);
+
+	return mt7915_mcu_set_vow_drr_ctrl(dev, NULL,
+					   VOW_DRR_CTRL_AIRTIME_DEFICIT_BOUND, 0);
+}
+
+static int mt7915_vow_atf_get(void *data, u64 *val)
+{
+	struct mt7915_dev *dev = data;
+
+	*val = dev->vow_atf_en;
+
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(fops_vow_atf, mt7915_vow_atf_get, mt7915_vow_atf_set,
+			 "%lld\n");
+
 static int
 mt7915_radar_trigger(void *data, u64 val)
 {
@@ -495,50 +518,11 @@ static int
 mt7915_fw_debug_wm_set(void *data, u64 val)
 {
 	struct mt7915_dev *dev = data;
-	enum {
-		DEBUG_TXCMD = 62,
-		DEBUG_CMD_RPT_TX,
-		DEBUG_CMD_RPT_TRIG,
-		DEBUG_SPL,
-		DEBUG_RPT_RX,
-	} debug;
-	bool tx, rx, en;
 	int ret;
 
 	dev->fw.debug_wm = val ? MCU_FW_LOG_TO_HOST : 0;
 
-	if (dev->fw.debug_bin)
-		val = 16;
-	else
-		val = dev->fw.debug_wm;
-
-	tx = dev->fw.debug_wm || (dev->fw.debug_bin & BIT(1));
-	rx = dev->fw.debug_wm || (dev->fw.debug_bin & BIT(2));
-	en = dev->fw.debug_wm || (dev->fw.debug_bin & BIT(0));
-
-	ret = mt7915_mcu_fw_log_2_host(dev, MCU_FW_LOG_WM, val);
-	if (ret)
-		goto out;
-
-	for (debug = DEBUG_TXCMD; debug <= DEBUG_RPT_RX; debug++) {
-		if (debug == DEBUG_RPT_RX)
-			val = en && rx;
-		else
-			val = en && tx;
-
-		ret = mt7915_mcu_fw_dbg_ctrl(dev, debug, val);
-		if (ret)
-			goto out;
-	}
-
-	/* WM CPU info record control */
-	mt76_clear(dev, MT_CPU_UTIL_CTRL, BIT(0));
-	mt76_wr(dev, MT_DIC_CMD_REG_CMD, BIT(2) | BIT(13) |
-		(dev->fw.debug_wm ? 0 : BIT(0)));
-	mt76_wr(dev, MT_MCU_WM_CIRQ_IRQ_MASK_CLR_ADDR, BIT(5));
-	mt76_wr(dev, MT_MCU_WM_CIRQ_IRQ_SOFT_ADDR, BIT(5));
-
-out:
+	ret = mt7915_mcu_fw_debug_set(dev, MCU_FW_LOG_WM, false);
 	if (ret)
 		dev->fw.debug_wm = 0;
 
@@ -566,13 +550,7 @@ mt7915_fw_debug_wa_set(void *data, u64 val)
 
 	dev->fw.debug_wa = val ? MCU_FW_LOG_TO_HOST : 0;
 
-	ret = mt7915_mcu_fw_log_2_host(dev, MCU_FW_LOG_WA, dev->fw.debug_wa);
-	if (ret)
-		goto out;
-
-	ret = mt7915_mcu_wa_cmd(dev, MCU_WA_PARAM_CMD(SET),
-				MCU_WA_PARAM_PDMA_RX, !!dev->fw.debug_wa, 0);
-out:
+	ret = mt7915_mcu_fw_debug_set(dev, MCU_FW_LOG_WA, false);
 	if (ret)
 		dev->fw.debug_wa = 0;
 
@@ -1227,11 +1205,11 @@ mt7915_twt_stats(struct seq_file *s, void *data)
 	struct mt7915_dev *dev = dev_get_drvdata(s->private);
 	struct mt7915_twt_flow *iter;
 
-	rcu_read_lock();
+	mutex_lock(&dev->mt76.mutex);
 
 	seq_puts(s, "     wcid |       id |    flags |      exp | mantissa");
 	seq_puts(s, " | duration |            tsf |\n");
-	list_for_each_entry_rcu(iter, &dev->twt_list, list)
+	list_for_each_entry(iter, &dev->twt_list, list)
 		seq_printf(s,
 			"%9d | %8d | %5c%c%c%c | %8d | %8d | %8d | %14lld |\n",
 			iter->wcid, iter->id,
@@ -1242,7 +1220,7 @@ mt7915_twt_stats(struct seq_file *s, void *data)
 			iter->exp, iter->mantissa,
 			iter->duration, iter->tsf);
 
-	rcu_read_unlock();
+	mutex_unlock(&dev->mt76.mutex);
 
 	return 0;
 }
@@ -1312,6 +1290,8 @@ int mt7915_init_debugfs(struct mt7915_phy *phy)
 	debugfs_create_devm_seqfile(dev->mt76.dev, "twt_stats", dir,
 				    mt7915_twt_stats);
 	debugfs_create_file("rf_regval", 0600, dir, dev, &fops_rf_regval);
+	if (!is_mt7915(&dev->mt76))
+		debugfs_create_file("vow_atf", 0600, dir, dev, &fops_vow_atf);
 
 	if (!dev->dbdc_support || phy->mt76->band_idx) {
 		debugfs_create_u32("dfs_hw_pattern", 0400, dir,

@@ -1099,8 +1099,10 @@ enum {
 	MCU_UNI_EVENT_PS_SYNC = 0x0d,
 	MCU_UNI_EVENT_SCAN_DONE = 0x0e,
 	MCU_UNI_EVENT_RDD_REPORT = 0x11,
+	MCU_UNI_EVENT_SAP = 0x1c,
 	MCU_UNI_EVENT_ROC = 0x27,
 	MCU_UNI_EVENT_MBMC = 0x28,
+	MCU_UNI_EVENT_BSS_IS_ABSENCE = 0x29,
 	MCU_UNI_EVENT_TX_DONE = 0x2d,
 	MCU_UNI_EVENT_THERMAL = 0x35,
 	MCU_UNI_EVENT_RSSI_MONITOR = 0x41,
@@ -1279,6 +1281,7 @@ enum {
 	MCU_EXT_CMD_THERMAL_CTRL = 0x2c,
 	MCU_EXT_CMD_WTBL_UPDATE = 0x32,
 	MCU_EXT_CMD_SET_DRR_CTRL = 0x36,
+	MCU_EXT_CMD_SET_FEATURE_CTRL = 0x38,
 	MCU_EXT_CMD_SET_RDD_CTRL = 0x3a,
 	MCU_EXT_CMD_ATE_CTRL = 0x3d,
 	MCU_EXT_CMD_PROTECT_CTRL = 0x3e,
@@ -1288,6 +1291,7 @@ enum {
 	MCU_EXT_CMD_MUAR_UPDATE = 0x48,
 	MCU_EXT_CMD_BCN_OFFLOAD = 0x49,
 	MCU_EXT_CMD_RX_AIRTIME_CTRL = 0x4a,
+	MCU_EXT_CMD_AT_PROC_MODULE = 0x4b,
 	MCU_EXT_CMD_SET_RX_PATH = 0x4e,
 	MCU_EXT_CMD_EFUSE_FREE_BLOCK = 0x4f,
 	MCU_EXT_CMD_TX_POWER_FEATURE_CTRL = 0x58,
@@ -1360,10 +1364,12 @@ enum {
 	MCU_UNI_CMD_ALL_STA_INFO = 0x6e,
 	MCU_UNI_CMD_ASSERT_DUMP = 0x6f,
 	MCU_UNI_CMD_EXT_EEPROM_CTRL = 0x74,
+	MCU_UNI_CMD_FACT_CAL = 0x7c,
 	MCU_UNI_CMD_RADIO_STATUS = 0x80,
 	MCU_UNI_CMD_MLD = 0x82,
 	MCU_UNI_CMD_PEER_MLD = 0x83,
 	MCU_UNI_CMD_SDO = 0x88,
+	MCU_UNI_CMD_AXIDMA = 0xa2,
 };
 
 enum {
@@ -1957,9 +1963,21 @@ mt76_connac_mcu_get_wlan_idx(struct mt76_dev *dev, struct mt76_wcid *wcid,
 #define MT76_CONNAC_MCU_STATUS_WLAN_FAILURE	0xc0000001
 
 static inline int
+mt76_connac_mcu_status_err(u32 status)
+{
+	if (!status)
+		return 0;
+
+	if (status == MT76_CONNAC_MCU_STATUS_WLAN_FAILURE)
+		return -ENOLINK;
+
+	return -EREMOTEIO;
+}
+
+static inline int
 mt76_connac_mcu_bss_deact_err(struct mt76_dev *mdev, int err, bool enable)
 {
-	if (err != (int)MT76_CONNAC_MCU_STATUS_WLAN_FAILURE)
+	if (err != -ENOLINK)
 		return err;
 
 	/* Ignore wlan_failure state false alarm when deactivating an
@@ -2102,7 +2120,7 @@ void mt76_connac_mcu_set_suspend_iter(void *priv, u8 *mac,
 int mt76_connac_sta_state_dp(struct mt76_dev *dev,
 			     enum ieee80211_sta_state old_state,
 			     enum ieee80211_sta_state new_state);
-int mt76_connac_mcu_chip_config(struct mt76_dev *dev);
+int mt76_connac_mcu_chip_config(struct mt76_dev *dev, const char *cmd);
 int mt76_connac_mcu_set_deep_sleep(struct mt76_dev *dev, bool enable);
 void mt76_connac_mcu_coredump_event(struct mt76_dev *dev, struct sk_buff *skb,
 				    struct mt76_connac_coredump *coredump);
